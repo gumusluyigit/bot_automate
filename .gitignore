@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Environment variables and credentials
+.env
+gmail_config.json
+settings.json
+
+# Database
+*.db
+invoice_emails.db
+receipts.db
+
+# Logs
+*.log
+automation_log.txt
+logs_export_*.txt
+
+# PDF files
+pdf_samples/
+downloads/
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store 

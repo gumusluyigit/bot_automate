@@ -1,0 +1,10 @@
+selenium==4.17.2
+PyPDF2==3.0.1
+pdfplumber==0.10.3
+python-dotenv==1.0.0
+SQLAlchemy==2.0.25
+imaplib2==3.6
+secure-smtplib==0.1.1
+webdriver-manager==4.0.1
+tkcalendar==1.6.1
+O365==2.0.31 
