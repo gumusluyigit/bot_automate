@@ -1,142 +1,148 @@
 from selenium import webdriver
-from selenium.webdriver.edge.service import Service
-from selenium.webdriver.edge.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException
-from webdriver_manager.microsoft import EdgeChromiumDriverManager
 from datetime import datetime
 import os
-import time
 import shutil
-from config import PDF_APP_URL, PDF_APP_USERNAME, PDF_APP_PASSWORD
 from pdf_processor import PDFProcessor
+from config import PDF_APP_URL, PDF_APP_USERNAME, PDF_APP_PASSWORD
 
 class WebAutomation:
     def __init__(self, download_dir: str, test_mode=True):
         self.download_dir = download_dir
-        self.driver = None
         self.test_mode = test_mode
+        os.makedirs(download_dir, exist_ok=True)
+        os.makedirs('processed', exist_ok=True)
         
-    def setup_driver(self):
-        """Setup Edge WebDriver with custom options"""
+    def search_and_download_pdf(self, target_week: tuple = None) -> list:
+        """Search and download unprocessed PDFs"""
         if self.test_mode:
-            return True
+            return self._handle_test_mode_pdfs(target_week)
+        else:
+            # Real implementation would go here
+            # This would interact with the actual web application
+            return []
             
-        edge_options = Options()
-        edge_options.add_experimental_option('prefs', {
-            'download.default_directory': self.download_dir,
-            'download.prompt_for_download': False,
-            'plugins.always_open_pdf_externally': True  # Download PDF instead of opening in browser
-        })
+    def _handle_test_mode_pdfs(self, target_week: tuple = None) -> list:
+        """Handle PDFs in test mode"""
+        downloaded_pdfs = []
         
-        service = Service(EdgeChromiumDriverManager().install())
-        self.driver = webdriver.Edge(service=service, options=edge_options)
-        
-    def login(self):
-        """Login to the PDF application"""
-        if self.test_mode:
-            print("[TEST MODE] Successfully logged in to the application")
-            return True
+        # Check if pdf_samples directory exists
+        if not os.path.exists('pdf_samples'):
+            print("Error: pdf_samples directory not found!")
+            print("Please create a pdf_samples directory and add sample PDFs.")
+            return []
             
-        try:
-            self.driver.get(PDF_APP_URL)
+        # Process each PDF in the samples directory
+        for pdf_file in os.listdir('pdf_samples'):
+            if not pdf_file.endswith('.pdf'):
+                continue
+                
+            source_path = os.path.join('pdf_samples', pdf_file)
+            target_path = os.path.join(self.download_dir, pdf_file)
             
-            # Wait for login form and fill credentials
-            username_field = WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.NAME, "username"))
-            )
-            password_field = self.driver.find_element(By.NAME, "password")
-            
-            username_field.send_keys(PDF_APP_USERNAME)
-            password_field.send_keys(PDF_APP_PASSWORD)
-            
-            # Find and click login button
-            login_button = self.driver.find_element(By.XPATH, "//button[@type='submit']")
-            login_button.click()
-            
-            # Wait for successful login
-            WebDriverWait(self.driver, 10).until(
-                EC.url_changes(PDF_APP_URL)
-            )
-            return True
-        except TimeoutException:
-            print("Login failed: Timeout waiting for elements")
-            return False
-        except Exception as e:
-            print(f"Login failed: {str(e)}")
-            return False
-    
-    def get_unprocessed_pdfs(self) -> list:
-        """Get list of unprocessed PDFs from the previous week"""
-        if self.test_mode:
-            if not os.path.exists("pdf_samples"):
-                print("[TEST MODE] pdf_samples directory not found!")
-                print("[TEST MODE] Please create a pdf_samples directory and add your sample PDFs")
-                return []
-            
-            unprocessed_pdfs = []
-            processed_list = self.load_processed_pdfs()
-            
-            # Look through all PDFs in the samples directory
-            for filename in os.listdir("pdf_samples"):
-                if filename.endswith(".pdf"):
-                    sample_pdf = os.path.join("pdf_samples", filename)
-                    # Skip if already processed
-                    if sample_pdf in processed_list:
+            try:
+                # Skip if already processed
+                if os.path.exists(os.path.join('processed', pdf_file)):
+                    print(f"Skipping already processed file: {pdf_file}")
+                    continue
+                
+                # Validate PDF and extract information
+                if not PDFProcessor.validate_pdf(source_path):
+                    print(f"Invalid PDF file: {pdf_file}")
+                    continue
+                    
+                # Extract invoice period
+                invoice_info = PDFProcessor.extract_invoice_info(source_path)
+                if not invoice_info:
+                    continue
+                
+                # If target week is specified, check if PDF falls within that week
+                if target_week:
+                    target_start, target_end = target_week
+                    pdf_start = invoice_info['period_start']
+                    pdf_end = invoice_info['period_end']
+                    
+                    # Skip if PDF period doesn't overlap with target week
+                    if pdf_end < target_start or pdf_start > target_end:
                         continue
-                        
-                    # Copy to downloads directory
-                    target_path = os.path.join(self.download_dir, filename)
-                    shutil.copy2(sample_pdf, target_path)
-                    print(f"[TEST MODE] Found unprocessed PDF: {filename}")
-                    unprocessed_pdfs.append(target_path)
-            
-            if not unprocessed_pdfs:
-                print("[TEST MODE] No unprocessed PDFs found")
-            
-            return unprocessed_pdfs
-        
-        # TODO: Implement real web automation to get PDFs
-        return []
-        
-    def load_processed_pdfs(self) -> set:
-        """Load list of already processed PDFs"""
-        processed_file = "processed_pdfs.txt"
-        if os.path.exists(processed_file):
-            with open(processed_file, 'r') as f:
-                return set(line.strip() for line in f)
-        return set()
+                
+                # Copy PDF to downloads directory if not already there
+                if not os.path.exists(target_path):
+                    shutil.copy2(source_path, target_path)
+                    downloaded_pdfs.append(target_path)
+                    print(f"Copied PDF to: {target_path}")
+                else:
+                    downloaded_pdfs.append(target_path)
+                    
+            except Exception as e:
+                print(f"Error processing {pdf_file}: {str(e)}")
+                continue
+                
+        return downloaded_pdfs
         
     def mark_as_processed(self, pdf_path: str):
-        """Mark a PDF as processed"""
-        with open("processed_pdfs.txt", 'a') as f:
-            f.write(f"{pdf_path}\n")
-    
-    def search_and_download_pdf(self, date_str: str = None) -> list:
-        """
-        Get all unprocessed PDFs. If date_str is provided, filter by that week.
-        Returns a list of PDF paths.
-        """
-        pdfs = self.get_unprocessed_pdfs()
-        
-        if date_str and pdfs:
-            # Filter PDFs by date if specified
-            filtered_pdfs = []
-            for pdf_path in pdfs:
-                filename = os.path.basename(pdf_path)
-                sample_dates = PDFProcessor.extract_date_from_filename(filename)
-                if sample_dates:
-                    pdf_date_str = f"{sample_dates[0].strftime('%Y%m%d')}-{sample_dates[1].strftime('%Y%m%d')}"
-                    if pdf_date_str == date_str:
-                        filtered_pdfs.append(pdf_path)
-            return filtered_pdfs
+        """Mark a PDF as processed by moving it to processed directory"""
+        try:
+            filename = os.path.basename(pdf_path)
+            processed_path = os.path.join('processed', filename)
             
-        return pdfs
-    
+            # Add timestamp to filename if it already exists
+            if os.path.exists(processed_path):
+                base, ext = os.path.splitext(filename)
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                processed_path = os.path.join('processed', f"{base}_{timestamp}{ext}")
+            
+            shutil.move(pdf_path, processed_path)
+            print(f"Marked as processed: {processed_path}")
+            return True
+        except Exception as e:
+            print(f"Error marking PDF as processed: {str(e)}")
+            return False
+            
+    def setup_driver(self):
+        """Setup Selenium WebDriver"""
+        if not self.test_mode:
+            options = webdriver.ChromeOptions()
+            options.add_experimental_option('prefs', {
+                'download.default_directory': self.download_dir,
+                'download.prompt_for_download': False,
+                'download.directory_upgrade': True,
+                'safebrowsing.enabled': True
+            })
+            self.driver = webdriver.Chrome(options=options)
+            
+    def login(self) -> bool:
+        """Login to the PDF application"""
+        if not self.test_mode:
+            try:
+                self.driver.get(PDF_APP_URL)
+                
+                # Wait for login form and enter credentials
+                username_field = WebDriverWait(self.driver, 10).until(
+                    EC.presence_of_element_located((By.ID, "username"))
+                )
+                password_field = self.driver.find_element(By.ID, "password")
+                
+                username_field.send_keys(PDF_APP_USERNAME)
+                password_field.send_keys(PDF_APP_PASSWORD)
+                
+                # Submit login form
+                password_field.submit()
+                
+                # Wait for successful login
+                WebDriverWait(self.driver, 10).until(
+                    EC.presence_of_element_located((By.ID, "dashboard"))
+                )
+                
+                return True
+            except Exception as e:
+                print(f"Login error: {str(e)}")
+                return False
+        return True
+        
     def close(self):
         """Close the browser"""
-        if not self.test_mode and self.driver:
-            self.driver.quit()
-            self.driver = None 
+        if not self.test_mode and hasattr(self, 'driver'):
+            self.driver.quit() 

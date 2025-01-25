@@ -56,21 +56,27 @@ class ReceiptAutomationGUI:
         options_frame = ttk.LabelFrame(self.main_tab, text="Processing Options", padding="10")
         options_frame.pack(fill='x', padx=10, pady=5)
         
-        # Process All Button
-        ttk.Button(options_frame, text="Process All Unprocessed PDFs", 
-                  command=self.process_all_receipts).pack(side='left', padx=5)
+        # Weekly Processing Frame
+        weekly_frame = ttk.LabelFrame(options_frame, text="Weekly Processing", padding="5")
+        weekly_frame.pack(fill='x', padx=5, pady=5)
         
-        # Process by Date
-        date_frame = ttk.LabelFrame(options_frame, text="Process by Date", padding="5")
-        date_frame.pack(side='left', padx=20)
+        # Last Week Button
+        ttk.Button(weekly_frame, text="Process Last Week's Receipts", 
+                  command=self.process_last_week).pack(side='left', padx=5)
         
-        ttk.Label(date_frame, text="Select Date:").pack(side='left', padx=5)
-        self.start_date = DateEntry(date_frame, width=12, background='darkblue',
-                                  foreground='white', borderwidth=2,
-                                  firstweekday='monday')
-        self.start_date.pack(side='left', padx=5)
+        # Custom Week Frame
+        custom_frame = ttk.LabelFrame(weekly_frame, text="Custom Week", padding="5")
+        custom_frame.pack(side='left', padx=20)
         
-        ttk.Button(date_frame, text="Process Selected Week", 
+        # Week selection
+        ttk.Label(custom_frame, text="Select Week:").pack(side='left', padx=5)
+        self.week_var = tk.StringVar()
+        weeks = self._get_recent_weeks()
+        week_dropdown = ttk.Combobox(custom_frame, textvariable=self.week_var, 
+                                   values=weeks, width=30)
+        week_dropdown.pack(side='left', padx=5)
+        
+        ttk.Button(custom_frame, text="Process Selected Week", 
                   command=self.process_selected_week).pack(side='left', padx=5)
         
         # Status Display
@@ -88,23 +94,44 @@ class ReceiptAutomationGUI:
         self.status_text['yscrollcommand'] = scrollbar.set
         self.status_text.config(state=tk.DISABLED)
         
-    def process_all_receipts(self):
-        """Process all unprocessed PDFs"""
+    def _get_recent_weeks(self):
+        """Generate list of recent weeks for dropdown"""
+        weeks = []
+        today = datetime.now()
+        
+        # Start from 12 weeks ago
+        for i in range(12, -1, -1):
+            # Get Monday of each week
+            monday = today - timedelta(days=today.weekday() + 7 * i)
+            sunday = monday + timedelta(days=6)
+            week_str = f"{monday.strftime('%b %d')} - {sunday.strftime('%b %d, %Y')}"
+            weeks.append(week_str)
+            
+        return weeks
+        
+    def process_last_week(self):
+        """Process PDFs from last week"""
         try:
             if not self.check_email_settings():
                 return
                 
-            self.log_message("Starting to process all unprocessed PDFs")
+            # Get last week's date range
+            today = datetime.now()
+            last_monday = today - timedelta(days=today.weekday() + 7)
+            last_sunday = last_monday + timedelta(days=6)
+            
+            self.log_message(f"Processing PDFs for last week ({last_monday.strftime('%Y-%m-%d')} to {last_sunday.strftime('%Y-%m-%d')})")
             self.update_status("="*50)
-            self.update_status("Processing All Unprocessed PDFs")
+            self.update_status(f"Processing Last Week's PDFs: {last_monday.strftime('%Y-%m-%d')} "
+                             f"to {last_sunday.strftime('%Y-%m-%d')}")
             self.update_status("="*50)
             
-            # Get all unprocessed PDFs
-            pdfs = self.web_automation.search_and_download_pdf()
+            # Get PDFs for last week
+            pdfs = self.web_automation.search_and_download_pdf(target_week=(last_monday, last_sunday))
             
             if not pdfs:
-                self.log_message("No unprocessed PDFs found")
-                self.update_status("No unprocessed PDFs found")
+                self.log_message("No unprocessed PDFs found for last week")
+                self.update_status("No unprocessed PDFs found for last week")
                 return
                 
             self.process_pdf_list(pdfs)
@@ -118,10 +145,17 @@ class ReceiptAutomationGUI:
             if not self.check_email_settings():
                 return
                 
-            # Get selected week dates
-            start_date = self.start_date.get_date()
-            end_date = start_date + timedelta(days=6)
-            date_str = f"{start_date.strftime('%Y%m%d')}-{end_date.strftime('%Y%m%d')}"
+            if not self.week_var.get():
+                messagebox.showerror("Error", "Please select a week first!")
+                return
+                
+            # Parse selected week
+            week_str = self.week_var.get()
+            start_date_str = week_str.split(' - ')[0]
+            end_date_str = week_str.split(' - ')[1]
+            
+            start_date = datetime.strptime(f"{start_date_str}, {datetime.now().year}", "%b %d, %Y")
+            end_date = datetime.strptime(end_date_str, "%b %d, %Y")
             
             self.log_message(f"Processing PDFs for week {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
             self.update_status("="*50)
@@ -130,7 +164,7 @@ class ReceiptAutomationGUI:
             self.update_status("="*50)
             
             # Get PDFs for selected week
-            pdfs = self.web_automation.search_and_download_pdf(date_str)
+            pdfs = self.web_automation.search_and_download_pdf(target_week=(start_date, end_date))
             
             if not pdfs:
                 self.log_message("No unprocessed PDFs found for selected week")
