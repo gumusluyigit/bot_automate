@@ -7,6 +7,7 @@ import os
 import shutil
 from pdf_processor import PDFProcessor
 from config import PDF_APP_URL, PDF_APP_USERNAME, PDF_APP_PASSWORD
+from database import clear_db, init_db
 
 class WebAutomation:
     def __init__(self, download_dir: str, test_mode=True):
@@ -14,7 +15,56 @@ class WebAutomation:
         self.test_mode = test_mode
         os.makedirs(download_dir, exist_ok=True)
         os.makedirs('processed', exist_ok=True)
+        os.makedirs('pdf_samples', exist_ok=True)  # Ensure pdf_samples exists
         
+    def reset_for_demo(self):
+        """Reset the environment for demonstration purposes"""
+        try:
+            processed_dir = 'processed'
+            samples_dir = 'pdf_samples'
+            
+            # Move files from processed back to pdf_samples with clean names
+            if os.path.exists(processed_dir):
+                for file in os.listdir(processed_dir):
+                    if file.endswith('.pdf'):
+                        # Get base filename without timestamp
+                        base_name = file.split('_20')[0] + '.pdf'
+                        processed_path = os.path.join(processed_dir, file)
+                        sample_path = os.path.join(samples_dir, base_name)
+                        
+                        # If the file already exists in samples, just remove from processed
+                        if os.path.exists(sample_path):
+                            os.remove(processed_path)
+                            print(f"Removed processed copy of {base_name}")
+                        else:
+                            # Move file back to samples with clean name
+                            shutil.move(processed_path, sample_path)
+                            print(f"Restored {base_name} to pdf_samples")
+            
+            # Clear downloads directory
+            if os.path.exists(self.download_dir):
+                for file in os.listdir(self.download_dir):
+                    file_path = os.path.join(self.download_dir, file)
+                    if os.path.isfile(file_path):
+                        os.remove(file_path)
+                        print(f"Cleared {file} from downloads")
+            
+            # Clear the email history database
+            clear_db()
+            init_db()
+            print("Reset email history database")
+            
+            # Clear processed_pdfs.txt if it exists
+            if os.path.exists('processed_pdfs.txt'):
+                os.remove('processed_pdfs.txt')
+                print("Cleared processed PDFs record")
+            
+            print("Environment reset completed successfully")
+            return True
+        except Exception as e:
+            print(f"Error resetting environment: {str(e)}")
+            return False
+            
     def search_and_download_pdf(self, target_week: tuple = None) -> list:
         """Search and download unprocessed PDFs"""
         if self.test_mode:
@@ -45,7 +95,17 @@ class WebAutomation:
             try:
                 # Skip if already processed
                 if os.path.exists(os.path.join('processed', pdf_file)):
-                    print(f"Skipping already processed file: {pdf_file}")
+                    if target_week:  # Only show skip message if file is within target week
+                        # Extract invoice period
+                        invoice_info = PDFProcessor.extract_invoice_info(source_path)
+                        if invoice_info:
+                            target_start, target_end = target_week
+                            pdf_start = invoice_info['period_start']
+                            pdf_end = invoice_info['period_end']
+                            
+                            # Show skip message only if PDF period overlaps with target week
+                            if not (pdf_end < target_start or pdf_start > target_end):
+                                print(f"Skipping already processed file: {pdf_file}")
                     continue
                 
                 # Validate PDF and extract information
@@ -67,6 +127,8 @@ class WebAutomation:
                     # Skip if PDF period doesn't overlap with target week
                     if pdf_end < target_start or pdf_start > target_end:
                         continue
+                    
+                    print(f"Found PDF within target week: {pdf_file}")
                 
                 # Copy PDF to downloads directory if not already there
                 if not os.path.exists(target_path):
@@ -79,6 +141,10 @@ class WebAutomation:
             except Exception as e:
                 print(f"Error processing {pdf_file}: {str(e)}")
                 continue
+                
+        if not downloaded_pdfs and target_week:
+            target_start, target_end = target_week
+            print(f"No unprocessed PDFs found for period {target_start.strftime('%Y-%m-%d')} to {target_end.strftime('%Y-%m-%d')}")
                 
         return downloaded_pdfs
         

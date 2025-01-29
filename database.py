@@ -1,42 +1,67 @@
-from sqlalchemy import create_engine, Column, String, DateTime
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+import sqlite3
 from datetime import datetime
-from config import DATABASE_URL
-
-Base = declarative_base()
-engine = create_engine(DATABASE_URL)
-Session = sessionmaker(bind=engine)
-
-class InvoiceEmail(Base):
-    __tablename__ = 'invoice_emails'
-    
-    invoice_number = Column(String, primary_key=True)
-    email = Column(String, nullable=False)
-    company_name = Column(String)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 def init_db():
-    Base.metadata.create_all(engine)
+    """Initialize the database"""
+    conn = sqlite3.connect('invoice_emails.db')
+    cursor = conn.cursor()
+    
+    # Create invoice_emails table if it doesn't exist
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS invoice_emails (
+            invoice_number TEXT PRIMARY KEY,
+            email TEXT NOT NULL,
+            company_name TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # Create sent_emails table if it doesn't exist
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS sent_emails (
+            invoice_number TEXT PRIMARY KEY,
+            email_address TEXT NOT NULL,
+            sent_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            pdf_path TEXT
+        )
+    ''')
+    
+    conn.commit()
+    conn.close()
 
 def get_email_by_invoice(invoice_number: str) -> str:
-    session = Session()
-    try:
-        record = session.query(InvoiceEmail).filter_by(invoice_number=invoice_number).first()
-        return record.email if record else None
-    finally:
-        session.close()
+    """Get email address for an invoice number"""
+    conn = sqlite3.connect('invoice_emails.db')
+    cursor = conn.cursor()
+    
+    cursor.execute('SELECT email FROM invoice_emails WHERE invoice_number = ?', (invoice_number,))
+    result = cursor.fetchone()
+    
+    conn.close()
+    return result[0] if result else None
 
 def add_invoice_email(invoice_number: str, email: str, company_name: str = None):
-    session = Session()
-    try:
-        invoice_email = InvoiceEmail(
-            invoice_number=invoice_number,
-            email=email,
-            company_name=company_name
-        )
-        session.add(invoice_email)
-        session.commit()
-    finally:
-        session.close() 
+    """Add or update invoice-email mapping"""
+    conn = sqlite3.connect('invoice_emails.db')
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        INSERT OR REPLACE INTO invoice_emails (invoice_number, email, company_name, updated_at)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+    ''', (invoice_number, email, company_name))
+    
+    conn.commit()
+    conn.close()
+
+def clear_db():
+    """Clear all records from the database"""
+    conn = sqlite3.connect('invoice_emails.db')
+    cursor = conn.cursor()
+    
+    # Clear both tables
+    cursor.execute('DELETE FROM invoice_emails')
+    cursor.execute('DELETE FROM sent_emails')
+    
+    conn.commit()
+    conn.close() 

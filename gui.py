@@ -9,6 +9,7 @@ from web_automation import WebAutomation
 from O365 import Account
 from email_handler import EmailHandler
 import shutil
+from database import init_db
 
 class ReceiptAutomationGUI:
     def __init__(self, root):
@@ -55,6 +56,12 @@ class ReceiptAutomationGUI:
         # Processing Options
         options_frame = ttk.LabelFrame(self.main_tab, text="Processing Options", padding="10")
         options_frame.pack(fill='x', padx=10, pady=5)
+        
+        # Demo Reset Button
+        reset_frame = ttk.Frame(options_frame)
+        reset_frame.pack(fill='x', padx=5, pady=5)
+        ttk.Button(reset_frame, text="Reset Environment for Demo", 
+                  command=self.reset_environment).pack(side='right', padx=5)
         
         # Weekly Processing Frame
         weekly_frame = ttk.LabelFrame(options_frame, text="Weekly Processing", padding="5")
@@ -565,6 +572,25 @@ class ReceiptAutomationGUI:
             messagebox.showinfo("Success", f"Logs exported to {export_file}")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to export logs: {str(e)}")
+
+    def reset_environment(self):
+        """Reset the environment for demonstration"""
+        try:
+            if self.web_automation.reset_for_demo():
+                # Clear any pending requests
+                if self.email_handler:
+                    self.email_handler.pending_requests = {}
+                    self.update_pending_requests()
+                
+                # Reinitialize email handler
+                self.email_handler = None
+                
+                self.update_status("\nEnvironment reset successfully. Ready for demo!")
+                messagebox.showinfo("Success", "Environment has been reset successfully!")
+            else:
+                messagebox.showerror("Error", "Failed to reset environment. Check the logs for details.")
+        except Exception as e:
+            self.handle_error(e)
 
 def main():
     root = tk.Tk()
