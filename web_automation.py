@@ -84,38 +84,55 @@ class WebAutomation:
             print("Please create a pdf_samples directory and add sample PDFs.")
             return []
             
+        # Clean up downloads directory first
+        if os.path.exists(self.download_dir):
+            for file in os.listdir(self.download_dir):
+                if file.endswith('.pdf'):
+                    os.remove(os.path.join(self.download_dir, file))
+        
         # Process each PDF in the samples directory
+        processed_invoices = set()  # Track processed invoices to avoid duplicates
+        
         for pdf_file in os.listdir('pdf_samples'):
             if not pdf_file.endswith('.pdf'):
                 continue
                 
             source_path = os.path.join('pdf_samples', pdf_file)
-            target_path = os.path.join(self.download_dir, pdf_file)
+            target_path = os.path.join(self.download_dir, pdf_file)  # Keep original filename
             
             try:
-                # Skip if already processed
-                if os.path.exists(os.path.join('processed', pdf_file)):
-                    if target_week:  # Only show skip message if file is within target week
-                        # Extract invoice period
-                        invoice_info = PDFProcessor.extract_invoice_info(source_path)
-                        if invoice_info:
-                            target_start, target_end = target_week
-                            pdf_start = invoice_info['period_start']
-                            pdf_end = invoice_info['period_end']
-                            
-                            # Show skip message only if PDF period overlaps with target week
-                            if not (pdf_end < target_start or pdf_start > target_end):
-                                print(f"Skipping already processed file: {pdf_file}")
-                    continue
-                
-                # Validate PDF and extract information
+                # First validate the PDF and extract information
                 if not PDFProcessor.validate_pdf(source_path):
                     print(f"Invalid PDF file: {pdf_file}")
                     continue
                     
-                # Extract invoice period
+                # Extract invoice information
                 invoice_info = PDFProcessor.extract_invoice_info(source_path)
                 if not invoice_info:
+                    continue
+                
+                # Get invoice number and period
+                invoice_number = invoice_info.get('invoice_number')
+                if not invoice_number:
+                    continue
+                    
+                # Skip if we've already processed this invoice number
+                if invoice_number in processed_invoices:
+                    print(f"Skipping duplicate invoice: {invoice_number}")
+                    continue
+                    
+                processed_invoices.add(invoice_number)
+                
+                # Skip if already processed
+                if os.path.exists(os.path.join('processed', pdf_file)):  # Check using original filename
+                    if target_week:  # Only show skip message if file is within target week
+                        target_start, target_end = target_week
+                        pdf_start = invoice_info['period_start']
+                        pdf_end = invoice_info['period_end']
+                        
+                        # Show skip message only if PDF period overlaps with target week
+                        if not (pdf_end < target_start or pdf_start > target_end):
+                            print(f"Skipping already processed file: {pdf_file}")
                     continue
                 
                 # If target week is specified, check if PDF falls within that week
@@ -130,13 +147,10 @@ class WebAutomation:
                     
                     print(f"Found PDF within target week: {pdf_file}")
                 
-                # Copy PDF to downloads directory if not already there
-                if not os.path.exists(target_path):
-                    shutil.copy2(source_path, target_path)
-                    downloaded_pdfs.append(target_path)
-                    print(f"Copied PDF to: {target_path}")
-                else:
-                    downloaded_pdfs.append(target_path)
+                # Copy PDF to downloads directory with original filename
+                shutil.copy2(source_path, target_path)
+                downloaded_pdfs.append(target_path)
+                print(f"Copied PDF to: {target_path}")
                     
             except Exception as e:
                 print(f"Error processing {pdf_file}: {str(e)}")

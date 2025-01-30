@@ -42,22 +42,10 @@ class PDFProcessor:
                     except ValueError:
                         pass
                 
-                # Pattern 3: Extract from filename as fallback
-                filename_match = re.search(r'(\d{8})-(\d{8})', text)
-                if filename_match:
-                    try:
-                        start_str, end_str = filename_match.groups()
-                        start_date = datetime.strptime(start_str, '%Y%m%d')
-                        end_date = datetime.strptime(end_str, '%Y%m%d')
-                        return start_date, end_date
-                    except ValueError:
-                        pass
-                
-                # If we get here, try to reconstruct from split parts
+                # Pattern 3: Handle case where month/year might be omitted in end date
                 parts = period_text.split('-')
                 if len(parts) == 2:
                     try:
-                        # Handle case where month/year might be omitted in end date
                         start_parts = parts[0].strip().split()
                         end_parts = parts[1].strip().split()
                         
@@ -93,21 +81,18 @@ class PDFProcessor:
                 first_page = pdf.pages[0]
                 text = first_page.extract_text()
                 
-                # Add filename to text for backup date extraction
-                filename = os.path.basename(pdf_path)
-                text = f"{text}\n{filename}"
-                
                 # Extract invoice number (primary identifier)
                 invoice_match = re.search(r'Invoice #\s*(\d+)', text)
                 if invoice_match:
                     invoice_info['invoice_number'] = invoice_match.group(1)
                 
-                # Extract company name from filename if not found in PDF
+                # Extract company name from PDF
                 company_match = re.search(r'Customer\s+(.+?)(?=\n|Account)', text)
                 if company_match:
                     invoice_info['company_name'] = company_match.group(1).strip()
                 else:
-                    # Extract from filename (e.g., "company_name_20250101-20250115.pdf")
+                    # Extract from filename as fallback
+                    filename = os.path.basename(pdf_path)
                     filename_company = filename.split('_')[0].title()
                     invoice_info['company_name'] = filename_company
                 
@@ -116,19 +101,15 @@ class PDFProcessor:
                 if date_match:
                     invoice_info['invoice_date'] = date_match.group(1).strip()
                 
-                # Extract invoice period
+                # Extract invoice period from PDF content first
                 period = PDFProcessor.extract_invoice_period(text)
                 if period:
                     start_date, end_date = period
                     invoice_info['period_start'] = start_date
                     invoice_info['period_end'] = end_date
                 else:
-                    # Try to extract period from filename as fallback
-                    filename_dates = re.search(r'(\d{8})-(\d{8})', filename)
-                    if filename_dates:
-                        start_str, end_str = filename_dates.groups()
-                        invoice_info['period_start'] = datetime.strptime(start_str, '%Y%m%d')
-                        invoice_info['period_end'] = datetime.strptime(end_str, '%Y%m%d')
+                    # If no period found in content, raise an error
+                    raise Exception("Could not extract invoice period from PDF content")
                 
                 # Extract total amount
                 amount_match = re.search(r'Total Amount Due:\s*([\d.]+)', text)
@@ -145,7 +126,7 @@ class PDFProcessor:
                     raise Exception("Could not extract invoice number from PDF")
                 
                 if not invoice_info.get('period_start') or not invoice_info.get('period_end'):
-                    raise Exception("Could not extract invoice period from PDF or filename")
+                    raise Exception("Could not extract invoice period from PDF content")
         
         except Exception as e:
             print(f"Error processing PDF {pdf_path}: {str(e)}")

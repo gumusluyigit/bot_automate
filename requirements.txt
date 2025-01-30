@@ -7,4 +7,6 @@ imaplib2==3.6
 secure-smtplib==0.1.1
 webdriver-manager==4.0.1
 tkcalendar==1.6.1
-O365==2.0.31 
+O365==2.0.31
+transformers==4.48.1
+torch==2.6.0 
