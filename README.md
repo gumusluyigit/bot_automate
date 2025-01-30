@@ -21,8 +21,8 @@ A Python application that automates the process of downloading PDF receipts and 
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/gumusluyigit/mail_automation.git
-cd mail_automation
+git clone https://github.com/gumusluyigit/bot_automate.git
+cd bot_automate
 ```
 
 2. Install required packages:
@@ -85,4 +85,4 @@ To run in test mode:
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details. 
+This project is licensed under the MIT License - see the LICENSE file for details.
