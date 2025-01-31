@@ -6,15 +6,16 @@ from datetime import datetime
 import sqlite3
 import os
 import json
+from database_handler import DatabaseHandler
 
 class EmailHandler:
-    def __init__(self, sender_email: str, internal_email: str):
+    def __init__(self, sender_email: str, internal_email: str, db_path=r"C:\SharedDB\pending_requests.db"):
         self.sender_email = sender_email
         self.internal_email = internal_email
-        self.pending_requests = {}
+        self.db = DatabaseHandler(db_path)
         
         # Initialize database
-        self.db_path = 'invoice_emails.db'
+        self.db_path = r'C:\SharedDB\invoice_emails.db'
         self.init_database()
         
         # Gmail SMTP settings
@@ -152,11 +153,7 @@ class EmailHandler:
             filename = os.path.basename(pdf_path)
             company_name = filename.split('_')[0].title()  # Extract company name from filename
             
-            self.pending_requests[invoice_number] = {
-                'request_time': datetime.now(),
-                'pdf_path': pdf_path,
-                'company_name': company_name
-            }
+            self.db.add_pending_request(invoice_number, company_name, pdf_path)
             
             return True
         except Exception as e:
@@ -239,11 +236,11 @@ class EmailHandler:
     def check_for_responses(self) -> dict:
         """Check for responses from internal department with company emails"""
         try:
-            if not self.pending_requests:
+            if not self.db.get_pending_requests():
                 return None
                 
             # In test mode, simulate a response for the first pending request
-            for invoice_number, details in self.pending_requests.items():
+            for invoice_number, details in self.db.get_pending_requests().items():
                 # Simulate receiving an email address
                 company_email = f"company_{invoice_number}@example.com"
                 
@@ -259,4 +256,70 @@ class EmailHandler:
             return None
         except Exception as e:
             print(f"Error checking responses: {str(e)}")
-            return None 
+            return None
+
+    def add_to_pending(self, invoice_number, company_name, pdf_path, period_start=None, period_end=None):
+        """Add an invoice to pending requests"""
+        return self.db.add_pending_request(invoice_number, company_name, pdf_path, period_start, period_end)
+        
+    def get_pending_requests(self):
+        """Get all pending requests"""
+        return self.db.get_pending_requests()
+        
+    def update_email(self, invoice_number, email):
+        """Update email for a pending request"""
+        return self.db.update_email(invoice_number, email)
+        
+    def is_invoice_pending(self, invoice_number):
+        """Check if an invoice is already in pending requests"""
+        return self.db.is_invoice_pending(invoice_number)
+        
+    def send_email(self, to_email, subject, body, attachments=None):
+        """Send an email with optional attachments"""
+        try:
+            msg = MIMEMultipart()
+            msg['From'] = self.sender_email
+            msg['To'] = to_email
+            msg['Subject'] = subject
+            
+            msg.attach(MIMEText(body, 'plain'))
+            
+            # Add attachments
+            if attachments:
+                for file_path in attachments:
+                    if os.path.exists(file_path):
+                        with open(file_path, 'rb') as f:
+                            part = MIMEApplication(f.read(), Name=os.path.basename(file_path))
+                            part['Content-Disposition'] = f'attachment; filename="{os.path.basename(file_path)}"'
+                            msg.attach(part)
+            
+            # Send email (implementation depends on your email server setup)
+            # This is a placeholder - you'll need to add your actual email sending code
+            print(f"Would send email to {to_email} with subject: {subject}")
+            print(f"Attachments: {attachments}")
+            
+            # Mark as sent in database
+            for attachment in attachments or []:
+                invoice_number = self._extract_invoice_number(attachment)
+                if invoice_number:
+                    self.db.mark_as_sent(invoice_number, to_email)
+            
+            return True
+            
+        except Exception as e:
+            print(f"Error sending email: {str(e)}")
+            # Log error in database
+            for attachment in attachments or []:
+                invoice_number = self._extract_invoice_number(attachment)
+                if invoice_number:
+                    self.db.mark_as_sent(invoice_number, to_email, status="error", error_message=str(e))
+            return False
+            
+    def _extract_invoice_number(self, pdf_path):
+        """Extract invoice number from PDF filename or path"""
+        # This is a placeholder - implement based on your PDF naming convention
+        return None
+        
+    def get_email_history(self, invoice_number=None):
+        """Get email sending history"""
+        return self.db.get_email_history(invoice_number) 

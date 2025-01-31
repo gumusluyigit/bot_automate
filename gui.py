@@ -15,57 +15,74 @@ import re
 
 class ReceiptAutomationGUI:
     def __init__(self, root):
+        """Initialize the GUI"""
         self.root = root
         self.root.title("Receipt Automation")
         self.root.geometry("1000x800")
         
-        # Initialize logging
-        self.log_file = "automation_log.txt"
-        
-        # Add processing state tracking
+        # Initialize variables
+        self.sender_email = tk.StringVar()
+        self.internal_email = tk.StringVar()
+        self.app_password = tk.StringVar()
+        self.week_var = tk.StringVar()
         self.is_processing = False
         
+        # Setup download directory
+        self.download_dir = os.path.join(os.getcwd(), 'downloads')
+        os.makedirs(self.download_dir, exist_ok=True)
+        
+        # Load config
+        self.load_config()
+        
+        # Setup logging
+        self.log_file = "automation_log.txt"
+        
+        # Initialize components
+        self.setup_gui()
+        
+        # Always create an EmailHandler for database access
+        self.email_handler = EmailHandler(
+            self.sender_email.get() or "temp@example.com",
+            self.internal_email.get() or "temp@example.com"
+        )
+        
+        # Initialize web automation
+        self.web_automation = WebAutomation(self.download_dir)
+        self.web_automation.email_handler = self.email_handler
+            
+        # Force initial update of pending requests
+        self.update_pending_requests_tab()
+        
+        self.log_message("Application started")
+
+    def setup_gui(self):
+        """Setup the GUI components"""
         # Create notebook for tabs
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill='both', expand=True, padx=10, pady=5)
         
-        # Create main tab
+        # Create tabs
         self.main_tab = ttk.Frame(self.notebook)
-        self.notebook.add(self.main_tab, text='Main')
-        
-        # Create chat tab
-        self.chatbot_tab = ttk.Frame(self.notebook)
-        self.notebook.add(self.chatbot_tab, text='Chat')
-        
-        # Create settings tab
-        self.settings_tab = ttk.Frame(self.notebook)
-        self.notebook.add(self.settings_tab, text='Settings')
-        
-        # Create pending tab
         self.pending_tab = ttk.Frame(self.notebook)
-        self.notebook.add(self.pending_tab, text='Pending Requests')
-        
-        # Create logs tab
+        self.settings_tab = ttk.Frame(self.notebook)
         self.logs_tab = ttk.Frame(self.notebook)
-        self.notebook.add(self.logs_tab, text='Logs')
+        self.chatbot_tab = ttk.Frame(self.notebook)  # Add chat tab
         
+        self.notebook.add(self.main_tab, text='Main')
+        self.notebook.add(self.pending_tab, text='Pending Requests')
+        self.notebook.add(self.settings_tab, text='Settings')
+        self.notebook.add(self.logs_tab, text='Logs')
+        self.notebook.add(self.chatbot_tab, text='Chat')  # Add chat tab
+        
+        # Setup each tab
         self.setup_main_tab()
         self.setup_pending_tab()
         self.setup_settings_tab()
         self.setup_logs_tab()
-        self.setup_chat_tab()
+        self.setup_chat_tab()  # Setup chat tab
         
-        # Load settings
-        self.load_settings()
-        
-        # Initialize automation components
-        self.download_dir = os.path.join(os.getcwd(), 'downloads')
-        os.makedirs(self.download_dir, exist_ok=True)
-        self.web_automation = WebAutomation(self.download_dir)
-        self.email_handler = None  # Will be initialized when processing receipts
-        self.chatbot = None  # Will be initialized when chat tab is selected
-        
-        self.log_message("Application started")
+        # Setup auto-refresh for pending requests
+        self.setup_auto_refresh()
 
     def setup_main_tab(self):
         """Setup the main receipt processing tab"""
@@ -289,15 +306,23 @@ class ReceiptAutomationGUI:
                         raise Exception("Invalid PDF file")
                     self.update_status("PDF validation successful!")
                     
-                    invoice_info = PDFProcessor.extract_invoice_info(pdf_path)
+                    try:
+                        invoice_info = PDFProcessor.extract_invoice_info(pdf_path)
+                    except Exception as e:
+                        self.update_status(f"Error extracting information from PDF: {str(e)}")
+                        failed += 1
+                        continue
+                        
                     invoice_number = invoice_info.get('invoice_number')
                     company_name = invoice_info.get('company_name', 'Unknown Company')
+                    period_start = invoice_info.get('period_start')
+                    period_end = invoice_info.get('period_end')
                     
                     if not invoice_number:
                         raise Exception("Could not extract invoice number from PDF")
                     
-                    # Check if invoice is already in pending requests
-                    if self.email_handler.pending_requests and invoice_number in self.email_handler.pending_requests:
+                    # Check if invoice is already in pending requests using database
+                    if self.email_handler.is_invoice_pending(invoice_number):
                         self.update_status(f"Skipping {pdf_name} - Invoice {invoice_number} is already in pending requests")
                         skipped += 1
                         continue
@@ -312,42 +337,41 @@ class ReceiptAutomationGUI:
                     company_email = self.email_handler.get_email_from_database(invoice_number)
                     
                     if company_email:
-                        # Send PDF directly to company
-                        self.update_status(f"Found email address: {company_email}")
+                        # Send receipt directly if we have the email
                         if self.email_handler.send_receipt_to_company(company_email, invoice_number, pdf_path):
-                            self.update_status(f"Successfully sent PDF to {company_email}")
-                            self.web_automation.mark_as_processed(pdf_path)
+                            self.update_status(f"Sent receipt to {company_email}")
                             processed += 1
                         else:
-                            raise Exception(f"Failed to send PDF to {company_email}")
+                            raise Exception(f"Failed to send receipt to {company_email}")
                     else:
-                        # Add to pending requests
-                        self.update_status(f"No email found for invoice {invoice_number}")
-                        self.email_handler.pending_requests[invoice_number] = {
-                            'company_name': company_name,
-                            'request_time': datetime.now(),
-                            'pdf_path': pdf_path
-                        }
-                        self.update_status("Added to pending requests")
-                        self.update_pending_requests()
-                        processed += 1
-                            
+                        # Add to pending requests and request email from internal department
+                        if self.email_handler.add_to_pending(invoice_number, company_name, pdf_path, period_start, period_end):
+                            self.update_status(f"Added invoice {invoice_number} to pending requests")
+                            if self.email_handler.request_company_email(invoice_number, f"Email needed for invoice {invoice_number}", pdf_path):
+                                self.update_status("Sent email request to internal department")
+                                processed += 1
+                                # Update pending requests tab
+                                self.update_pending_requests_tab()
+                            else:
+                                raise Exception("Failed to send email request to internal department")
+                        else:
+                            raise Exception("Failed to add to pending requests")
+                    
                 except Exception as e:
-                    self.update_status(f"Error processing {os.path.basename(pdf_path)}: {str(e)}")
+                    self.update_status(f"Error processing {pdf_name}: {str(e)}")
                     failed += 1
-                    continue
                     
             self.update_status("\n" + "="*50)
             self.update_status(f"Processing completed: {processed} successful, {skipped} skipped, {failed} failed")
-            if failed == 0:
-                if skipped > 0:
-                    messagebox.showinfo("Success", f"Processing completed: {processed} successful, {skipped} skipped (already sent)")
-                else:
-                    messagebox.showinfo("Success", "All PDFs processed successfully!")
-            else:
-                messagebox.showwarning("Warning", f"Processing completed with {failed} errors")
             
-        finally:
+            # Final update of pending requests tab
+            self.update_pending_requests_tab()
+            
+            self.is_processing = False
+            self.update_processing_state()
+            
+        except Exception as e:
+            self.handle_error(e)
             self.is_processing = False
             self.update_processing_state()
             
@@ -358,14 +382,9 @@ class ReceiptAutomationGUI:
             self.notebook.select(2)  # Switch to settings tab
             return False
             
-        # Initialize email handler if not already done
-        if not self.email_handler:
-            self.email_handler = EmailHandler(
-                self.sender_email.get(),
-                self.internal_email.get()
-            )
-            # Pass email handler to web automation
-            self.web_automation.email_handler = self.email_handler
+        # Update email handler with current settings
+        self.email_handler.sender_email = self.sender_email.get()
+        self.email_handler.internal_email = self.internal_email.get()
         return True
         
     def handle_error(self, error: Exception):
@@ -377,89 +396,88 @@ class ReceiptAutomationGUI:
 
     def setup_settings_tab(self):
         """Setup the settings tab"""
-        # Email Settings
-        email_frame = ttk.LabelFrame(self.settings_tab, text="Gmail Settings", padding="10")
+        # Email Settings Frame
+        email_frame = ttk.LabelFrame(self.settings_tab, text="Email Settings", padding="10")
         email_frame.pack(fill='x', padx=10, pady=5)
         
         # Sender Email
-        ttk.Label(email_frame, text="Gmail Address:").grid(row=0, column=0, 
-                                                         sticky='w', padx=5, pady=2)
-        self.sender_email = ttk.Entry(email_frame, width=40)
-        self.sender_email.grid(row=0, column=1, padx=5, pady=2)
+        sender_frame = ttk.Frame(email_frame)
+        sender_frame.pack(fill='x', pady=5)
+        ttk.Label(sender_frame, text="Sender Email:").pack(side='left', padx=5)
+        ttk.Entry(sender_frame, textvariable=self.sender_email, width=40).pack(side='left', padx=5)
         
-        # App Password
-        ttk.Label(email_frame, text="App Password:").grid(row=1, column=0, 
-                                                        sticky='w', padx=5, pady=2)
-        self.app_password = ttk.Entry(email_frame, width=40, show='*')
-        self.app_password.grid(row=1, column=1, padx=5, pady=2)
+        # Internal Email
+        internal_frame = ttk.Frame(email_frame)
+        internal_frame.pack(fill='x', pady=5)
+        ttk.Label(internal_frame, text="Internal Email:").pack(side='left', padx=5)
+        ttk.Entry(internal_frame, textvariable=self.internal_email, width=40).pack(side='left', padx=5)
         
-        # Help text for App Password
-        help_text = ("Note: You need to generate an App Password for your Gmail account.\n"
-                    "1. Go to Google Account settings\n"
-                    "2. Enable 2-Step Verification if not enabled\n"
-                    "3. Go to Security > App passwords\n"
-                    "4. Generate a new App password for 'Mail'")
-        help_label = ttk.Label(email_frame, text=help_text, wraplength=400)
-        help_label.grid(row=2, column=0, columnspan=2, padx=5, pady=5)
+        # Gmail App Password
+        password_frame = ttk.Frame(email_frame)
+        password_frame.pack(fill='x', pady=5)
+        ttk.Label(password_frame, text="Gmail App Password:").pack(side='left', padx=5)
+        password_entry = ttk.Entry(password_frame, textvariable=self.app_password, show="*", width=40)
+        password_entry.pack(side='left', padx=5)
         
-        # Internal Department Email
-        ttk.Label(email_frame, text="Internal Dept Email:").grid(row=3, column=0, 
-                                                               sticky='w', padx=5, pady=2)
-        self.internal_email = ttk.Entry(email_frame, width=40)
-        self.internal_email.grid(row=3, column=1, padx=5, pady=2)
-        
-        # Test Email Button
-        ttk.Button(email_frame, text="Test Email Settings", 
-                  command=self.test_email_settings).grid(row=4, column=0, 
-                                                       columnspan=2, pady=10)
+        # Buttons Frame
+        buttons_frame = ttk.Frame(email_frame)
+        buttons_frame.pack(fill='x', pady=10)
         
         # Save Settings Button
-        ttk.Button(self.settings_tab, text="Save Settings", 
-                  command=self.save_settings).pack(pady=10)
-
-    def load_settings(self):
-        """Load settings from file"""
-        try:
-            if os.path.exists('settings.json'):
-                with open('settings.json', 'r') as f:
-                    settings = json.load(f)
-                    self.sender_email.insert(0, settings.get('sender_email', ''))
-                    self.internal_email.insert(0, settings.get('internal_email', ''))
-            
-            # Load Gmail password if it exists
-            if os.path.exists('gmail_config.json'):
-                with open('gmail_config.json', 'r') as f:
-                    credentials = json.load(f)
-                    self.app_password.insert(0, credentials.get('app_password', ''))
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to load settings: {str(e)}")
-
+        ttk.Button(buttons_frame, text="Save Settings", 
+                  command=self.save_settings).pack(side='left', padx=5)
+        
+        # Test Settings Button
+        ttk.Button(buttons_frame, text="Test Settings", 
+                  command=self.test_email_settings).pack(side='left', padx=5)
+                  
     def save_settings(self):
-        """Save settings to file"""
+        """Save and apply email settings"""
         try:
-            # Save email settings
-            settings = {
-                'sender_email': self.sender_email.get(),
-                'internal_email': self.internal_email.get()
-            }
-            with open('settings.json', 'w') as f:
-                json.dump(settings, f)
-            
-            # Save Gmail password
-            if self.app_password.get():
-                if not self.email_handler:
-                    self.email_handler = EmailHandler(
-                        self.sender_email.get(),
-                        self.internal_email.get()
-                    )
-                self.email_handler.save_credentials(self.app_password.get())
-            
-            self.log_message("Settings saved successfully")
-            messagebox.showinfo("Success", "Settings saved successfully!")
+            if self.save_config():
+                # Initialize or update email handler
+                self.email_handler = EmailHandler(
+                    self.sender_email.get(),
+                    self.internal_email.get()
+                )
+                if self.app_password.get():
+                    self.email_handler.save_credentials(self.app_password.get())
+                
+                self.log_message("Settings saved successfully")
+                messagebox.showinfo("Success", "Settings saved successfully!")
+            else:
+                messagebox.showerror("Error", "Failed to save settings")
         except Exception as e:
             error_msg = f"Failed to save settings: {str(e)}"
             self.log_message(f"ERROR: {error_msg}")
             messagebox.showerror("Error", error_msg)
+
+    def load_config(self):
+        """Load email configuration from file"""
+        try:
+            if os.path.exists('email_config.json'):
+                with open('email_config.json', 'r') as f:
+                    config = json.load(f)
+                    self.sender_email.set(config.get('sender_email', ''))
+                    self.internal_email.set(config.get('internal_email', ''))
+                    self.app_password.set(config.get('app_password', ''))
+        except Exception as e:
+            self.log_message(f"Error loading config: {str(e)}")
+            
+    def save_config(self):
+        """Save email configuration to file"""
+        try:
+            config = {
+                'sender_email': self.sender_email.get(),
+                'internal_email': self.internal_email.get(),
+                'app_password': self.app_password.get()
+            }
+            with open('email_config.json', 'w') as f:
+                json.dump(config, f)
+            return True
+        except Exception as e:
+            self.log_message(f"Error saving config: {str(e)}")
+            return False
 
     def test_email_settings(self):
         """Test email settings"""
@@ -503,164 +521,107 @@ class ReceiptAutomationGUI:
 
     def setup_pending_tab(self):
         """Setup the pending requests tab"""
-        # Main frame
-        main_frame = ttk.Frame(self.pending_tab)
-        main_frame.pack(fill='both', expand=True, padx=10, pady=5)
+        # Create treeview for pending requests
+        columns = ('Invoice', 'Company', 'Request Time', 'PDF Path', 'Status')
+        self.pending_tree = ttk.Treeview(self.pending_tab, columns=columns, show='headings')
         
-        # Pending requests list
-        list_frame = ttk.LabelFrame(main_frame, text="Pending Email Requests", padding="10")
-        list_frame.pack(fill='both', expand=True)
+        # Set column headings
+        for col in columns:
+            self.pending_tree.heading(col, text=col)
+            self.pending_tree.column(col, width=100)  # Adjust width as needed
         
-        # Create canvas and scrollable frame for better control
-        canvas = tk.Canvas(list_frame)
-        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=canvas.yview)
-        scrollable_frame = ttk.Frame(canvas)
+        # Add scrollbar
+        scrollbar = ttk.Scrollbar(self.pending_tab, orient='vertical', command=self.pending_tree.yview)
+        self.pending_tree.configure(yscrollcommand=scrollbar.set)
         
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
+        # Email entry and send button
+        email_frame = ttk.Frame(self.pending_tab)
+        ttk.Label(email_frame, text="Email:").pack(side='left', padx=5)
+        self.pending_email_entry = ttk.Entry(email_frame, width=40)
+        self.pending_email_entry.pack(side='left', padx=5)
+        ttk.Button(email_frame, text="Send", command=self.send_pending_email).pack(side='left', padx=5)
         
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
+        # Pack everything
+        self.pending_tree.pack(fill='both', expand=True, padx=10, pady=5)
+        scrollbar.pack(side='right', fill='y')
+        email_frame.pack(fill='x', padx=10, pady=5)
         
-        # Headers
-        ttk.Label(scrollable_frame, text="Invoice", width=15).grid(row=0, column=0, padx=5, pady=5)
-        ttk.Label(scrollable_frame, text="Company", width=20).grid(row=0, column=1, padx=5, pady=5)
-        ttk.Label(scrollable_frame, text="Request Time", width=20).grid(row=0, column=2, padx=5, pady=5)
-        ttk.Label(scrollable_frame, text="Email", width=30).grid(row=0, column=3, padx=5, pady=5)
-        ttk.Label(scrollable_frame, text="Action", width=10).grid(row=0, column=4, padx=5, pady=5)
-        
-        # Store frame reference for updates
-        self.pending_frame = scrollable_frame
-        self.pending_entries = {}
-        
-        # Pack canvas and scrollbar
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-        
-    def update_pending_requests(self):
-        """Update the pending requests display"""
-        # Clear existing entries
-        for widget in self.pending_frame.winfo_children()[5:]:  # Skip headers
-            widget.destroy()
-        self.pending_entries.clear()
-        
-        # Add pending requests
-        if self.email_handler and self.email_handler.pending_requests:
-            row = 1
-            for invoice, details in self.email_handler.pending_requests.items():
-                # Invoice number
-                ttk.Label(self.pending_frame, text=invoice, width=15).grid(
-                    row=row, column=0, padx=5, pady=5)
-                
-                # Company name
-                ttk.Label(self.pending_frame, text=details['company_name'], width=20).grid(
-                    row=row, column=1, padx=5, pady=5)
-                
-                # Request time
-                ttk.Label(self.pending_frame, 
-                         text=details['request_time'].strftime('%Y-%m-%d %H:%M'),
-                         width=20).grid(row=row, column=2, padx=5, pady=5)
-                
-                # Email entry
-                email_entry = ttk.Entry(self.pending_frame, width=35)
-                email_entry.grid(row=row, column=3, padx=5, pady=5)
-                
-                # Button frame for send and dismiss buttons
-                button_frame = ttk.Frame(self.pending_frame)
-                button_frame.grid(row=row, column=4, padx=5, pady=5)
-                
-                # Send button
-                send_button = ttk.Button(button_frame, text="Send",
-                                       command=lambda i=invoice, e=email_entry: 
-                                       self.send_pending_receipt(i, e))
-                send_button.pack(side='left', padx=(0, 2))
-                
-                # Dismiss button (red X)
-                dismiss_button = tk.Button(button_frame, text="✕", fg='red', 
-                                         command=lambda i=invoice: self.dismiss_request(i),
-                                         width=2, font=('Arial', 8, 'bold'))
-                dismiss_button.pack(side='left')
-                
-                # Store references
-                self.pending_entries[invoice] = {
-                    'entry': email_entry,
-                    'send_button': send_button,
-                    'dismiss_button': dismiss_button
-                }
-                
-                row += 1
-            
-            self.update_status(f"Updated pending requests list: {len(self.email_handler.pending_requests)} items")
-            
-    def send_pending_receipt(self, invoice_number: str, email_entry: ttk.Entry):
-        """Send receipt to company using manually entered email"""
-        email = email_entry.get().strip()
-        if not email:
-            messagebox.showerror("Error", "Please enter an email address.")
-            return
-            
-        if not re.match(r"[^@]+@[^@]+\.[^@]+", email):
-            messagebox.showerror("Error", "Please enter a valid email address.")
-            return
-            
+    def update_pending_requests_tab(self):
+        """Update the pending requests tab with current data"""
         try:
-            details = self.email_handler.pending_requests.get(invoice_number)
-            if not details:
-                messagebox.showerror("Error", "Request details not found.")
-                return
-                
-            pdf_path = details.get('pdf_path')
-            if not pdf_path or not os.path.exists(pdf_path):
-                messagebox.showerror("Error", "PDF file not found.")
-                return
-                
-            # Send receipt to company
-            self.log_message(f"Sending receipt for invoice {invoice_number} to {email}")
-            self.update_status(f"Sending receipt to company ({email})...")
+            # Store current selection
+            selected_items = []
+            for item_id in self.pending_tree.selection():
+                item = self.pending_tree.item(item_id)
+                selected_items.append(item['values'][0])  # Store invoice number
             
-            if self.email_handler.send_receipt_to_company(email, invoice_number, pdf_path):
-                self.log_message("Receipt sent successfully")
-                self.update_status("Receipt sent successfully")
+            # Use existing email handler to get pending requests
+            pending_requests = self.email_handler.get_pending_requests()
+            
+            # Clear existing items
+            for item in self.pending_tree.get_children():
+                self.pending_tree.delete(item)
                 
-                # Mark PDF as processed
-                self.web_automation.mark_as_processed(pdf_path)
-                
-                # Remove from pending requests
-                if invoice_number in self.email_handler.pending_requests:
-                    del self.email_handler.pending_requests[invoice_number]
+            # Add pending requests to treeview and restore selection
+            for request in pending_requests:
+                invoice_number, company_name, request_time, pdf_path, status, email, period_start, period_end = request
+                item_id = self.pending_tree.insert('', 'end', values=(
+                    invoice_number,
+                    company_name,
+                    request_time,
+                    pdf_path,
+                    status
+                ))
+                # Restore selection if this was previously selected
+                if invoice_number in selected_items:
+                    self.pending_tree.selection_add(item_id)
                     
-                # Update display
-                self.update_pending_requests()
-                messagebox.showinfo("Success", f"Receipt sent successfully to {email}")
-            else:
-                raise Exception("Failed to send receipt")
-                
         except Exception as e:
-            error_msg = f"Error sending receipt: {str(e)}"
-            self.log_message(f"ERROR: {error_msg}")
-            self.update_status(error_msg)
-            messagebox.showerror("Error", error_msg)
-
-    def dismiss_request(self, invoice_number: str):
-        """Dismiss a pending request"""
-        if messagebox.askyesno("Confirm Dismiss", 
-                             f"Are you sure you want to dismiss the request for invoice {invoice_number}?"):
-            try:
-                # Remove from pending requests
-                if invoice_number in self.email_handler.pending_requests:
-                    del self.email_handler.pending_requests[invoice_number]
-                    
-                # Update display
-                self.update_pending_requests()
-                self.log_message(f"Dismissed request for invoice {invoice_number}")
-                self.update_status(f"Dismissed request for invoice {invoice_number}")
-            except Exception as e:
-                error_msg = f"Error dismissing request: {str(e)}"
-                self.log_message(f"ERROR: {error_msg}")
-                self.update_status(error_msg)
-                messagebox.showerror("Error", error_msg)
+            self.log_message(f"Error updating pending requests tab: {str(e)}")
+            
+    def send_pending_email(self):
+        """Send email for selected pending request"""
+        selection = self.pending_tree.selection()
+        if not selection:
+            messagebox.showwarning("No Selection", "Please select a pending request first.")
+            return
+            
+        item = self.pending_tree.item(selection[0])
+        invoice_number = item['values'][0]
+        pdf_path = item['values'][3]
+        
+        # Get email from entry
+        email = self.pending_email_entry.get().strip()
+        if not email:
+            messagebox.showwarning("No Email", "Please enter an email address.")
+            return
+            
+        # Update email in database
+        if not self.email_handler.update_email(invoice_number, email):
+            messagebox.showerror("Error", "Failed to update email address.")
+            return
+            
+        # Send email
+        subject = f"Invoice {invoice_number}"
+        body = f"Please find attached invoice {invoice_number}."
+        if self.email_handler.send_email(email, subject, body, [pdf_path]):
+            messagebox.showinfo("Success", f"Email sent successfully to {email}")
+            self.update_pending_requests_tab()
+        else:
+            messagebox.showerror("Error", "Failed to send email.")
+            
+    def setup_auto_refresh(self):
+        """Setup automatic refresh of pending requests tab"""
+        def refresh():
+            # Only update if we're on the pending tab and no item is being edited
+            if (self.notebook.select() == str(self.pending_tab) and 
+                not self.pending_email_entry.focus_get()):  # Don't refresh if user is entering email
+                self.update_pending_requests_tab()
+            # Schedule next refresh
+            self.root.after(1000, refresh)  # Refresh every second for better responsiveness
+            
+        # Start the refresh cycle immediately
+        refresh()
 
     def setup_logs_tab(self):
         """Setup the logs tab"""
@@ -749,13 +710,26 @@ class ReceiptAutomationGUI:
         """Reset the environment for demonstration"""
         try:
             if self.web_automation.reset_for_demo():
-                # Clear any pending requests
-                if self.email_handler:
-                    self.email_handler.pending_requests = {}
-                    self.update_pending_requests()
+                # Create a fresh EmailHandler instance
+                temp_handler = EmailHandler(
+                    self.sender_email.get() or "temp@example.com",
+                    self.internal_email.get() or "temp@example.com"
+                )
                 
-                # Reinitialize email handler
-                self.email_handler = None
+                # Clear the database tables
+                temp_handler.db.clear_all_tables()
+                
+                # Reinitialize email handler with current or temporary settings
+                self.email_handler = EmailHandler(
+                    self.sender_email.get() or "temp@example.com",
+                    self.internal_email.get() or "temp@example.com"
+                )
+                
+                # Update web automation with new email handler
+                self.web_automation.email_handler = self.email_handler
+                
+                # Update the pending requests tab
+                self.update_pending_requests_tab()
                 
                 self.update_status("\nEnvironment reset successfully. Ready for demo!")
                 messagebox.showinfo("Success", "Environment has been reset successfully!")
@@ -763,92 +737,6 @@ class ReceiptAutomationGUI:
                 messagebox.showerror("Error", "Failed to reset environment. Check the logs for details.")
         except Exception as e:
             self.handle_error(e)
-
-    def setup_chat_tab(self):
-        """Setup the chat interface tab"""
-        # Create main chat frame
-        chat_frame = ttk.Frame(self.chatbot_tab)
-        chat_frame.pack(fill='both', expand=True, padx=10, pady=10)
-
-        # Create chat display area
-        self.chat_display = tk.Text(chat_frame, wrap=tk.WORD, height=20, width=50)
-        self.chat_display.pack(fill='both', expand=True, padx=5, pady=5)
-        self.chat_display.config(state='disabled')
-
-        # Create input frame
-        input_frame = ttk.Frame(chat_frame)
-        input_frame.pack(fill='x', padx=5, pady=5)
-
-        # Create input field
-        self.chat_input = ttk.Entry(input_frame)
-        self.chat_input.pack(side='left', fill='x', expand=True, padx=(0, 5))
-        self.chat_input.bind('<Return>', self.send_message)
-
-        # Create send button
-        send_button = ttk.Button(input_frame, text='Send', command=self.send_message)
-        send_button.pack(side='right')
-
-        # Create clear button
-        clear_button = ttk.Button(chat_frame, text='Clear Chat', command=self.clear_chat)
-        clear_button.pack(pady=5)
-
-        # Initialize chatbot when tab is selected
-        self.notebook.bind('<<NotebookTabChanged>>', self.on_tab_change)
-
-    def on_tab_change(self, event):
-        """Initialize chatbot when chat tab is selected"""
-        current_tab = self.notebook.select()
-        tab_text = self.notebook.tab(current_tab, "text")
-        
-        if tab_text == "Chat" and self.chatbot is None:
-            self.initialize_chatbot()
-
-    def initialize_chatbot(self):
-        """Initialize the chatbot"""
-        self.update_chat_display("Initializing chatbot... Please wait...\n")
-        self.chatbot = Chatbot()
-        self.chatbot.set_gui(self)  # Pass GUI reference to chatbot
-        self.update_chat_display("Chatbot is ready! You can start chatting.\n")
-        self.update_chat_display("Merhaba! Size nasıl yardımcı olabilirim?\n\n")
-
-    def send_message(self, event=None):
-        """Send a message to the chatbot and display the response"""
-        if self.chatbot is None:
-            self.update_chat_display("Please wait for the chatbot to initialize...\n")
-            return
-
-        user_message = self.chat_input.get().strip()
-        if not user_message:
-            return
-
-        # Clear input field
-        self.chat_input.delete(0, tk.END)
-
-        # Display user message
-        self.update_chat_display(f"You: {user_message}\n")
-
-        # Get and display bot response
-        try:
-            response = self.chatbot.get_response(user_message)
-            self.update_chat_display(f"Bot: {response}\n")
-        except Exception as e:
-            self.update_chat_display(f"Error: Could not get response from chatbot. {str(e)}\n")
-
-    def update_chat_display(self, message):
-        """Update the chat display with a new message"""
-        self.chat_display.config(state='normal')
-        self.chat_display.insert(tk.END, message)
-        self.chat_display.see(tk.END)
-        self.chat_display.config(state='disabled')
-
-    def clear_chat(self):
-        """Clear the chat display and reset the chatbot"""
-        self.chat_display.config(state='normal')
-        self.chat_display.delete(1.0, tk.END)
-        self.chat_display.config(state='disabled')
-        if self.chatbot:
-            self.chatbot.reset_chat()
-        self.update_chat_display("Chat cleared. You can start a new conversation.\n")
 
     def update_processing_state(self):
         """Update UI elements based on processing state"""
@@ -858,6 +746,92 @@ class ReceiptAutomationGUI:
                 for widget in child.winfo_children():
                     if isinstance(widget, (ttk.Button, ttk.Combobox)):
                         widget.configure(state=state)
+
+    def setup_chat_tab(self):
+        """Setup the chat interface tab"""
+        # Create main chat frame
+        chat_frame = ttk.Frame(self.chatbot_tab)
+        chat_frame.pack(fill='both', expand=True, padx=10, pady=10)
+        
+        # Create chat display area
+        self.chat_display = tk.Text(chat_frame, wrap=tk.WORD, height=20, width=50)
+        self.chat_display.pack(fill='both', expand=True, padx=5, pady=5)
+        self.chat_display.config(state='disabled')
+        
+        # Create input frame
+        input_frame = ttk.Frame(chat_frame)
+        input_frame.pack(fill='x', padx=5, pady=5)
+        
+        # Create input field
+        self.chat_input = ttk.Entry(input_frame)
+        self.chat_input.pack(side='left', fill='x', expand=True, padx=(0, 5))
+        self.chat_input.bind('<Return>', self.send_message)
+        
+        # Create send button
+        send_button = ttk.Button(input_frame, text='Send', command=self.send_message)
+        send_button.pack(side='right')
+        
+        # Create clear button
+        clear_button = ttk.Button(chat_frame, text='Clear Chat', command=self.clear_chat)
+        clear_button.pack(pady=5)
+        
+        # Initialize chatbot when tab is selected
+        self.notebook.bind('<<NotebookTabChanged>>', self.on_tab_change)
+        
+    def on_tab_change(self, event):
+        """Initialize chatbot when chat tab is selected"""
+        current_tab = self.notebook.select()
+        tab_text = self.notebook.tab(current_tab, "text")
+        
+        if tab_text == "Chat" and not hasattr(self, 'chatbot'):
+            self.initialize_chatbot()
+            
+    def initialize_chatbot(self):
+        """Initialize the chatbot"""
+        self.update_chat_display("Initializing chatbot... Please wait...\n")
+        self.chatbot = Chatbot()
+        self.chatbot.set_gui(self)  # Pass GUI reference to chatbot
+        self.update_chat_display("Chatbot is ready! You can start chatting.\n")
+        self.update_chat_display("Merhaba! Size nasıl yardımcı olabilirim?\n\n")
+        
+    def send_message(self, event=None):
+        """Send a message to the chatbot and display the response"""
+        if not hasattr(self, 'chatbot'):
+            self.update_chat_display("Please wait for the chatbot to initialize...\n")
+            return
+            
+        user_message = self.chat_input.get().strip()
+        if not user_message:
+            return
+            
+        # Clear input field
+        self.chat_input.delete(0, tk.END)
+        
+        # Display user message
+        self.update_chat_display(f"You: {user_message}\n")
+        
+        # Get and display bot response
+        try:
+            response = self.chatbot.get_response(user_message)
+            self.update_chat_display(f"Bot: {response}\n")
+        except Exception as e:
+            self.update_chat_display(f"Error: Could not get response from chatbot. {str(e)}\n")
+            
+    def update_chat_display(self, message):
+        """Update the chat display with a new message"""
+        self.chat_display.config(state='normal')
+        self.chat_display.insert(tk.END, message)
+        self.chat_display.see(tk.END)
+        self.chat_display.config(state='disabled')
+        
+    def clear_chat(self):
+        """Clear the chat display and reset the chatbot"""
+        self.chat_display.config(state='normal')
+        self.chat_display.delete(1.0, tk.END)
+        self.chat_display.config(state='disabled')
+        if hasattr(self, 'chatbot'):
+            self.chatbot.reset_chat()
+        self.update_chat_display("Chat cleared. You can start a new conversation.\n")
 
 def main():
     root = tk.Tk()
