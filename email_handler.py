@@ -174,6 +174,7 @@ class EmailHandler:
         
     def mark_as_sent(self, invoice_number: str, email_address: str, pdf_path: str):
         """Mark an invoice as sent"""
+        # Update sent_emails table
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -185,6 +186,9 @@ class EmailHandler:
         
         conn.commit()
         conn.close()
+        
+        # Update pending_requests table using DatabaseHandler
+        self.db.mark_as_sent(invoice_number, email_address, "sent")
 
     def send_receipt_to_company(self, company_email: str, invoice_number: str, 
                               pdf_path: str) -> bool:

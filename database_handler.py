@@ -23,9 +23,17 @@ class DatabaseHandler:
                     status TEXT DEFAULT 'pending',
                     email TEXT NULL,
                     period_start DATE,
-                    period_end DATE
+                    period_end DATE,
+                    display_invoice_number TEXT
                 )
             ''')
+            
+            # Add display_invoice_number column if it doesn't exist
+            try:
+                cursor.execute('SELECT display_invoice_number FROM pending_requests LIMIT 1')
+            except sqlite3.OperationalError:
+                print("Adding display_invoice_number column...")
+                cursor.execute('ALTER TABLE pending_requests ADD COLUMN display_invoice_number TEXT')
             
             # Create sent_emails table to track history
             cursor.execute('''
@@ -43,16 +51,25 @@ class DatabaseHandler:
     def add_pending_request(self, invoice_number, company_name, pdf_path, period_start=None, period_end=None):
         """Add a new pending request"""
         try:
+            # Extract the actual invoice number from the PDF
+            from pdf_processor import PDFProcessor
+            invoice_info = PDFProcessor.extract_invoice_info(pdf_path)
+            actual_invoice_number = invoice_info.get('invoice_number') if invoice_info else None
+            
+            if not actual_invoice_number:
+                print(f"Could not extract invoice number from PDF: {pdf_path}")
+                return False
+            
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     INSERT OR REPLACE INTO pending_requests 
-                    (invoice_number, company_name, pdf_path, period_start, period_end)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (invoice_number, company_name, pdf_path, period_start, period_end))
+                    (invoice_number, company_name, pdf_path, period_start, period_end, display_invoice_number)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (actual_invoice_number, company_name, pdf_path, period_start, period_end, invoice_number))
                 conn.commit()
                 return True
-        except sqlite3.Error as e:
+        except Exception as e:
             print(f"Error adding pending request: {e}")
             return False
             

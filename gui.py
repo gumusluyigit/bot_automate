@@ -218,68 +218,175 @@ class ReceiptAutomationGUI:
             self.update_processing_state()
             
     def process_selected_week(self):
-        """Process PDFs for selected week"""
+        """Process PDFs for the selected week"""
         try:
             if self.is_processing:
-                messagebox.showwarning("Warning", "Please wait for the current processing to complete before selecting a new date range.")
                 return
-                
-            if not self.check_email_settings():
-                return
-                
-            if not self.week_var.get():
-                messagebox.showerror("Error", "Please select a week first!")
-                return
-                
-            # Find the selected week's dates from our stored weeks
-            selected_display = self.week_var.get()
-            weeks = self._get_recent_weeks()
-            selected_dates = None
             
-            for week_display, start_date, end_date in weeks:
-                if week_display == selected_display:
-                    selected_dates = (start_date, end_date)
-                    break
-            
-            if not selected_dates:
-                messagebox.showerror("Error", "Could not determine selected week's dates!")
+            # Get selected week
+            selected_week = self.week_var.get()
+            if not selected_week:
+                messagebox.showerror("Error", "Please select a week first")
                 return
-                
-            start_date, end_date = selected_dates
             
+            # Turkish month names mapping
+            turkish_months = {
+                'Ocak': '01', 'Şubat': '02', 'Mart': '03', 'Nisan': '04',
+                'Mayıs': '05', 'Haziran': '06', 'Temmuz': '07', 'Ağustos': '08',
+                'Eylül': '09', 'Ekim': '10', 'Kasım': '11', 'Aralık': '12'
+            }
+            
+            # Parse week string to get start and end dates
+            week_match = re.match(r'(\d{1,2}) ([A-Za-zşğüçöıİ]+) (\d{4}) - (\d{1,2}) ([A-Za-zşğüçöıİ]+) (\d{4})', selected_week)
+            if not week_match:
+                messagebox.showerror("Error", "Invalid week format")
+                return
+            
+            start_day, start_month_tr, start_year, end_day, end_month_tr, end_year = week_match.groups()
+            
+            # Convert Turkish month names to numbers
+            if start_month_tr not in turkish_months or end_month_tr not in turkish_months:
+                messagebox.showerror("Error", "Invalid month name")
+                return
+            
+            # Create date strings in the format YYYY-MM-DD
+            start_date_str = f"{start_year}-{turkish_months[start_month_tr]}-{int(start_day):02d}"
+            end_date_str = f"{end_year}-{turkish_months[end_month_tr]}-{int(end_day):02d}"
+            
+            # Parse dates
+            try:
+                start_date = datetime.strptime(start_date_str, '%Y-%m-%d')
+                end_date = datetime.strptime(end_date_str, '%Y-%m-%d')
+            except ValueError as e:
+                messagebox.showerror("Error", f"Invalid date format: {str(e)}")
+                return
+            
+            # Update status
             self.is_processing = True
             self.update_processing_state()
             
-            self.log_message(f"Processing PDFs for week {start_date.strftime('%d %B %Y')} to {end_date.strftime('%d %B %Y')}")
-            self.update_status("="*50)
-            self.update_status(f"Processing PDFs for Week: {start_date.strftime('%d %B %Y')} "
-                             f"to {end_date.strftime('%d %B %Y')}")
-            self.update_status("="*50)
+            # Log the start of processing
+            timestamp = datetime.now().strftime('%H:%M:%S')
+            self.log_message(f"\n{timestamp}: ==================================================")
+            self.log_message(f"{timestamp}: Processing PDFs for Week: {start_date.strftime('%d %B %Y')} to {end_date.strftime('%d %B %Y')}")
+            self.log_message(f"{timestamp}: ==================================================")
             
-            # Get PDFs for selected week
-            pdfs, skipped = self.web_automation.search_and_download_pdf(target_week=(start_date, end_date))
+            # Search and download PDFs
+            downloaded_pdfs, skipped_pdfs = self.web_automation.search_and_download_pdf((start_date, end_date))
             
-            if not pdfs and not skipped:
-                self.log_message("No PDFs found for the specified week")
-                self.update_status("No PDFs found for the specified week")
-                self.is_processing = False
-                self.update_processing_state()
+            if not downloaded_pdfs and not skipped_pdfs:
+                message = f"No PDFs found for the week of {start_date.strftime('%d %B %Y')}"
+                self.log_message(f"{timestamp}: {message}")
+                self.update_status(message)
                 return
-                
-            if skipped:
-                self.update_status("\nSkipped PDFs:")
-                for pdf_name, reason in skipped:
-                    self.update_status(f"- {pdf_name}: {reason}")
-                
-            if pdfs:
-                self.process_pdf_list(pdfs)
-            else:
-                self.update_status("\nNo new PDFs to process")
-                self.is_processing = False
-                self.update_processing_state()
+            
+            # Log found PDFs
+            self.log_message(f"{timestamp}: Found {len(downloaded_pdfs) + len(skipped_pdfs)} PDF(s) within target week\n")
+            self.update_status(f"\nFound {len(downloaded_pdfs) + len(skipped_pdfs)} PDF(s) within target week\n")
+            
+            # Process downloaded PDFs
+            successful = 0
+            failed = 0
+            skipped = len(skipped_pdfs)
+            
+            for i, pdf_path in enumerate(downloaded_pdfs, 1):
+                try:
+                    filename = os.path.basename(pdf_path)
+                    self.log_message(f"{timestamp}: Processing PDF ({i}/{len(downloaded_pdfs)}): {filename}")
+                    self.update_status(f"Processing PDF ({i}/{len(downloaded_pdfs)}): {filename}")
+                    
+                    # Validate PDF
+                    if not PDFProcessor.validate_pdf(pdf_path):
+                        self.log_message(f"{timestamp}: PDF validation failed: {filename}")
+                        self.update_status(f"PDF validation failed: {filename}")
+                        failed += 1
+                        continue
+                        
+                    self.log_message(f"{timestamp}: PDF validation successful!")
+                    self.update_status("PDF validation successful!")
+                    
+                    # Extract company name and check if it's already in pending requests or processed
+                    company_name = os.path.splitext(filename)[0].split('_')[0]
+                    
+                    # Check if this file is already in pending requests
+                    if self.email_handler.is_invoice_pending(company_name):
+                        error_msg = f"Skipping {filename} - Already in pending requests"
+                        self.log_message(f"{timestamp}: {error_msg}")
+                        self.update_status(error_msg)
+                        skipped += 1
+                        continue
+                    
+                    # Check if this file was already processed (email sent)
+                    if self.email_handler.check_if_sent(company_name):
+                        error_msg = f"Skipping {filename} - Email already sent"
+                        self.log_message(f"{timestamp}: {error_msg}")
+                        self.update_status(error_msg)
+                        skipped += 1
+                        continue
+                    
+                    # Check if we have an email address for this company
+                    company_email = self.email_handler.get_email_from_database(company_name)
+                    
+                    if company_email:
+                        # If we have an email, send it directly
+                        if self.email_handler.send_receipt_to_company(company_email, company_name, pdf_path):
+                            self.log_message(f"{timestamp}: Successfully sent email to {company_email}")
+                            self.update_status(f"Successfully sent email to {company_email}")
+                            # Only move to processed after successful email sending
+                            self.web_automation.mark_as_processed(pdf_path)
+                            successful += 1
+                        else:
+                            error_msg = f"Failed to send email to {company_email}"
+                            self.log_message(f"{timestamp}: {error_msg}")
+                            self.update_status(error_msg)
+                            failed += 1
+                    else:
+                        # If no email found, add to pending requests
+                        if self.email_handler.add_to_pending(invoice_number=company_name, company_name=company_name, 
+                                                           pdf_path=pdf_path, period_start=start_date, period_end=end_date):
+                            self.log_message(f"{timestamp}: Added to pending requests")
+                            self.update_status("Added to pending requests")
+                            successful += 1
+                            # Do NOT move to processed folder - keep in downloads until email is sent
+                        else:
+                            error_msg = f"Error processing {filename}: Failed to add to pending requests"
+                            self.log_message(f"{timestamp}: {error_msg}")
+                            self.update_status(error_msg)
+                            failed += 1
+                    
+                except Exception as e:
+                    error_msg = f"Error processing {os.path.basename(pdf_path)}: {str(e)}"
+                    self.log_message(f"{timestamp}: {error_msg}")
+                    self.update_status(error_msg)
+                    failed += 1
+            
+            # Log skipped PDFs
+            if skipped_pdfs:
+                self.log_message(f"\n{timestamp}: Skipped PDFs (already processed):")
+                self.update_status("\nSkipped PDFs (already processed):")
+                for pdf_path in skipped_pdfs:
+                    filename = os.path.basename(pdf_path)
+                    self.log_message(f"{timestamp}: - {filename}")
+                    self.update_status(f"- {filename}")
+            
+            # Update status with final counts
+            self.log_message(f"\n{timestamp}: ==================================================")
+            self.update_status("\n==================================================")
+            summary = f"Processing completed: {successful} successful, {skipped} skipped, {failed} failed"
+            self.log_message(f"{timestamp}: {summary}")
+            
+            # Update status display with bullet points
+            self.update_status("\nProcessing Summary:")
+            self.update_status(f"• Successfully processed: {successful}")
+            self.update_status(f"• Already processed (skipped): {skipped}")
+            self.update_status(f"• Failed to process: {failed}")
+            
+            # Update pending requests tab
+            self.update_pending_requests_tab()
             
         except Exception as e:
             self.handle_error(e)
+        finally:
             self.is_processing = False
             self.update_processing_state()
             
@@ -292,12 +399,12 @@ class ReceiptAutomationGUI:
             skipped = 0
             
             # Show total PDFs found
-            self.update_status(f"Found {total} PDF(s) within target week")
+            self.update_status(f"Found {total} PDF(s) within target week\n")
             
             for pdf_path in pdf_paths:
                 try:
                     pdf_name = os.path.basename(pdf_path)
-                    self.update_status(f"\nProcessing PDF ({processed + skipped + failed + 1}/{total}): {pdf_name}")
+                    self.update_status(f"Processing PDF ({processed + skipped + failed + 1}/{total}): {pdf_name}")
                     
                     if not os.path.exists(pdf_path):
                         raise Exception("PDF file not found - it may have been removed")
@@ -340,6 +447,9 @@ class ReceiptAutomationGUI:
                         # Send receipt directly if we have the email
                         if self.email_handler.send_receipt_to_company(company_email, invoice_number, pdf_path):
                             self.update_status(f"Sent receipt to {company_email}")
+                            # Move file to processed folder after successful email sending
+                            if self.web_automation.mark_as_processed(pdf_path):
+                                self.update_status(f"Moved {pdf_name} to processed folder")
                             processed += 1
                         else:
                             raise Exception(f"Failed to send receipt to {company_email}")
@@ -506,18 +616,36 @@ class ReceiptAutomationGUI:
             messagebox.showerror("Error", error_msg)
 
     def update_status(self, message):
-        """Update status text widget with new message"""
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        status_message = f"{timestamp}: {message}"
-        
-        self.status_text.config(state=tk.NORMAL)
-        self.status_text.insert(tk.END, status_message + "\n")
-        self.status_text.see(tk.END)
-        self.status_text.config(state=tk.DISABLED)
-        self.root.update()
-        
-        # Also log the message
-        self.log_message(message)
+        """Update the status display with a new message"""
+        try:
+            # Get current timestamp
+            timestamp = datetime.now().strftime('%H:%M:%S')
+            
+            # Format the message
+            if message.startswith('=='):
+                # Section separator
+                formatted_message = f"\n{message}\n"
+            elif message.startswith('•'):
+                # Bullet point
+                formatted_message = f"{timestamp}: {message}\n"
+            elif message.startswith('-'):
+                # List item
+                formatted_message = f"{timestamp}:   {message}\n"
+            else:
+                # Normal message
+                formatted_message = f"{timestamp}: {message}\n"
+            
+            # Update status text widget
+            if hasattr(self, 'status_text'):
+                self.status_text.configure(state='normal')
+                self.status_text.insert('end', formatted_message)
+                self.status_text.see('end')
+                self.status_text.configure(state='disabled')
+                
+            # Force GUI update
+            self.root.update_idletasks()
+        except Exception as e:
+            print(f"Error updating status: {str(e)}")
 
     def setup_pending_tab(self):
         """Setup the pending requests tab"""
@@ -605,7 +733,19 @@ class ReceiptAutomationGUI:
         subject = f"Invoice {invoice_number}"
         body = f"Please find attached invoice {invoice_number}."
         if self.email_handler.send_email(email, subject, body, [pdf_path]):
+            # Move file to processed folder after successful email sending
+            if self.web_automation.mark_as_processed(pdf_path):
+                self.update_status(f"Moved {os.path.basename(pdf_path)} to processed folder")
+            
+            # Mark the request as sent in the database
+            self.email_handler.mark_as_sent(invoice_number, email, "sent")
+            
+            # Clear the email entry
+            self.pending_email_entry.delete(0, tk.END)
+            
             messagebox.showinfo("Success", f"Email sent successfully to {email}")
+            
+            # Update the pending requests display
             self.update_pending_requests_tab()
         else:
             messagebox.showerror("Error", "Failed to send email.")

@@ -105,67 +105,94 @@ class PDFProcessor:
     def extract_invoice_info(pdf_path: str) -> dict:
         """Extract invoice information from PDF"""
         try:
-            # First try to extract info from filename
-            filename = os.path.basename(pdf_path)
             info = {}
             
-            # Extract company name and dates from filename
-            # Pattern: company_[tdm_]YYYYMMDD-YYYYMMDD.pdf
-            match = re.match(r'([a-zA-Z0-9_]+)(?:_tdm)?_(\d{8})-(\d{8})\.pdf', filename)
-            if match:
-                company_name, start_date_str, end_date_str = match.groups()
-                info['company_name'] = company_name.replace('_', ' ').title()
+            # First try to read PDF content using pdfplumber
+            with pdfplumber.open(pdf_path) as pdf:
+                text = ""
+                for page in pdf.pages:
+                    text += page.extract_text() + "\n"
                 
-                # Parse dates
-                try:
-                    start_date = datetime.strptime(start_date_str, '%Y%m%d')
-                    end_date = datetime.strptime(end_date_str, '%Y%m%d')
-                    info['period_start'] = start_date
-                    info['period_end'] = end_date
-                    
-                    # Generate invoice number based on company and week
-                    week_num = start_date.isocalendar()[1]
-                    year = start_date.year
-                    info['invoice_number'] = f"{year}{week_num:02d}{hash(company_name) % 1000:03d}"
-                    
-                    return info
-                except ValueError as e:
-                    print(f"Error parsing dates from filename: {str(e)}")
-            
-            # If filename parsing fails, try to read PDF content
-            with open(pdf_path, 'rb') as f:
-                content = f.read()
+                # Extract invoice number from PDF content - try multiple patterns
+                invoice_patterns = [
+                    r'Invoice\s*Number:?\s*(\d+)',  # Standard format: "Invoice Number: 12345"
+                    r'Invoice\s*#:?\s*(\d+)',       # Alternative format: "Invoice #: 12345"
+                    r'Invoice\s*ID:?\s*(\d+)',      # Alternative format: "Invoice ID: 12345"
+                    r'Invoice:\s*(\d+)',            # Simple format: "Invoice: 12345"
+                    r'#\s*(\d+)',                   # Very simple format: "# 12345"
+                    r'Number:\s*(\d+)',             # Simple format: "Number: 12345"
+                    r'ID:\s*(\d+)',                 # Simple format: "ID: 12345"
+                    r'(\d{8,})'                     # Any 8+ digit number (likely an invoice number)
+                ]
                 
-            try:
-                decoded = content.decode('utf-8')
-            except UnicodeDecodeError:
-                try:
-                    decoded = content.decode('ascii', errors='ignore')
-                except:
-                    raise Exception("Could not decode PDF content")
-                    
-            # Extract information from PDF content
-            lines = decoded.split('\n')
+                for pattern in invoice_patterns:
+                    invoice_match = re.search(pattern, text, re.IGNORECASE)
+                    if invoice_match:
+                        info['invoice_number'] = invoice_match.group(1).strip()
+                        break
+                
+                # If no invoice number found in content, try to extract from filename
+                if 'invoice_number' not in info:
+                    filename = os.path.basename(pdf_path)
+                    # Try to find any 8+ digit number in the filename
+                    number_match = re.search(r'(\d{8,})', filename)
+                    if number_match:
+                        info['invoice_number'] = number_match.group(1)
+                
+                # Extract company name
+                company_patterns = [
+                    r'Company:?\s*([^\n]+)',
+                    r'Client:?\s*([^\n]+)',
+                    r'Customer:?\s*([^\n]+)',
+                    r'Bill\s+To:?\s*([^\n]+)'
+                ]
+                
+                for pattern in company_patterns:
+                    company_match = re.search(pattern, text, re.IGNORECASE)
+                    if company_match:
+                        info['company_name'] = company_match.group(1).strip()
+                        break
+                
+                # If no company name found in content, extract from filename
+                if 'company_name' not in info:
+                    filename = os.path.basename(pdf_path)
+                    match = re.match(r'([a-zA-Z0-9_]+)(?:_tdm)?_(\d{8})-(\d{8})\.pdf', filename)
+                    if match:
+                        info['company_name'] = match.group(1).replace('_', ' ').title()
+                
+                # Extract period dates
+                period_patterns = [
+                    r'Period:?\s*(\d{4}-\d{2}-\d{2})\s*to\s*(\d{4}-\d{2}-\d{2})',
+                    r'Date:?\s*(\d{4}-\d{2}-\d{2})\s*to\s*(\d{4}-\d{2}-\d{2})',
+                    r'From:?\s*(\d{4}-\d{2}-\d{2})\s*to\s*(\d{4}-\d{2}-\d{2})'
+                ]
+                
+                for pattern in period_patterns:
+                    period_match = re.search(pattern, text, re.IGNORECASE)
+                    if period_match:
+                        info['period_start'] = datetime.strptime(period_match.group(1).strip(), '%Y-%m-%d')
+                        info['period_end'] = datetime.strptime(period_match.group(2).strip(), '%Y-%m-%d')
+                        break
+                
+                # If no period found in content, extract from filename
+                if 'period_start' not in info or 'period_end' not in info:
+                    filename = os.path.basename(pdf_path)
+                    match = re.match(r'([a-zA-Z0-9_]+)(?:_tdm)?_(\d{8})-(\d{8})\.pdf', filename)
+                    if match:
+                        try:
+                            info['period_start'] = datetime.strptime(match.group(2), '%Y%m%d')
+                            info['period_end'] = datetime.strptime(match.group(3), '%Y%m%d')
+                        except ValueError as e:
+                            print(f"Error parsing dates from filename: {str(e)}")
             
-            for line in lines:
-                line = line.strip()
-                if 'Invoice Number:' in line:
-                    info['invoice_number'] = line.split('Invoice Number:')[1].strip()
-                elif 'Company:' in line:
-                    info['company_name'] = line.split('Company:')[1].strip()
-                elif 'Period:' in line:
-                    period = line.split('Period:')[1].strip()
-                    start_date, end_date = period.split('to')
-                    info['period_start'] = datetime.strptime(start_date.strip(), '%Y-%m-%d')
-                    info['period_end'] = datetime.strptime(end_date.strip(), '%Y-%m-%d')
-                    
             # Check if we found all required information
             required_fields = ['invoice_number', 'company_name', 'period_start', 'period_end']
             if all(field in info for field in required_fields):
                 return info
-                
-            raise Exception("Could not extract required information from PDF")
+            
+            missing_fields = [field for field in required_fields if field not in info]
+            raise Exception(f"Could not extract required information from PDF. Missing fields: {missing_fields}")
             
         except Exception as e:
-            print(f"Error extracting invoice info: {str(e)}")
+            print(f"Error extracting invoice info from {pdf_path}: {str(e)}")
             raise 

@@ -34,7 +34,8 @@ class Chatbot:
             "belge", "belgeler", "belgeleri",
             "hafta", "haftanın", "haftasının",
             "geçen", "gecen", "gçn",
-            "arası", "arasında", "arasnda"
+            "arası", "arasında", "arasnda",
+            "gönder", "gonder", "yolla", "email", "mail", "e-mail"
         ]
         
         self.processed_dir = 'processed'
@@ -48,7 +49,8 @@ class Chatbot:
                     "- 'Geçen haftanın faturalarını işle'\n"
                     "- '15 Ocak 2025 haftasının PDFlerini işle'\n"
                     "- 'Bu haftanın belgelerini işle'\n"
-                    "- '15/01/2025 - 21/01/2025 arası PDFleri işle'"),
+                    "- '15/01/2025 - 21/01/2025 arası PDFleri işle'\n"
+                    "- '123 numaralı PDFi example@mail.com adresine gönder'"),
             'thanks': "Rica ederim! Başka bir konuda yardımcı olabilir miyim?",
             'goodbye': "Görüşmek üzere! Başka bir işleminiz olursa yardımcı olmaktan memnuniyet duyarım.",
             'status': "Durum bilgisini kontrol ediyorum...",
@@ -174,6 +176,11 @@ class Chatbot:
         """Process commands related to PDF processing with typo tolerance"""
         text = text.lower().strip()
         
+        # Check for email sending command first
+        email_command = self._process_email_command(text)
+        if email_command is not None:
+            return email_command
+        
         # Known command templates
         command_templates = [
             "geçen haftanın faturalarını işle",
@@ -193,10 +200,10 @@ class Chatbot:
         start_date, end_date = self.extract_date_range(text)
         if not start_date or not end_date:
             return ("Tarih aralığını anlayamadım. İşte bazı örnek kullanımlar:\n\n" + \
-                   "- 'Geçen haftanın faturalarını işle'\n" + \
-                   "- '15 Ocak 2025 - 21 Ocak 2025 arası faturaları process et'\n" + \
-                   "- '15 Ocak 2025 haftasının PDFlerini işle'\n" + \
-                   "- 'Bu haftanın belgelerini işle'\n" + \
+                   "- 'Geçen haftanın faturalarını işle'\n"
+                   "- '15 Ocak 2025 - 21 Ocak 2025 arası faturaları process et'\n"
+                   "- '15 Ocak 2025 haftasının PDFlerini işle'\n"
+                   "- 'Bu haftanın belgelerini işle'\n"
                    "- '15/01/2025 - 21/01/2025 arası PDFleri işle'")
         
         # Format date range for messages in Turkish
@@ -476,3 +483,83 @@ class Chatbot:
                "- '15 Ocak 2025 haftasının PDFlerini işle'\n"
                "- 'Bu haftanın belgelerini işle'\n"
                "- '15/01/2025 - 21/01/2025 arası PDFleri işle'") 
+
+    def _process_email_command(self, text):
+        """Process commands related to sending emails"""
+        # Check if this is an email sending command
+        email_keywords = ["gönder", "gonder", "yolla", "email", "mail", "e-mail"]
+        if not any(keyword in text for keyword in email_keywords):
+            return None
+            
+        try:
+            # Extract invoice number from the command
+            invoice_match = re.search(r'(\d+)(?:\s*numaral[ıi])?(?:\s*pdf)', text)
+            if not invoice_match:
+                return "Fatura numarasını anlayamadım. Lütfen '123 numaralı PDFi example@mail.com adresine gönder' formatında bir komut girin."
+            
+            target_invoice_number = invoice_match.group(1)
+            
+            # Extract email address
+            email_match = re.search(r'([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', text)
+            if not email_match:
+                return "Email adresini anlayamadım. Lütfen geçerli bir email adresi belirtin."
+            
+            email = email_match.group(1)
+            
+            # Check if GUI reference exists
+            if not self.gui:
+                return "Email gönderme fonksiyonu şu anda kullanılamıyor."
+            
+            # Check email settings first
+            if not self.gui.check_email_settings():
+                return "Lütfen önce email ayarlarını yapılandırın. Ayarlar sekmesinden email adreslerini giriniz."
+            
+            # Get all pending requests
+            pending_requests = self.gui.email_handler.get_pending_requests()
+            matching_request = None
+            found_invoice_number = None
+            
+            # First, try to find the PDF by checking invoice numbers inside PDFs
+            for request in pending_requests:
+                pdf_path = request[3]  # request[3] is pdf_path
+                if not os.path.exists(pdf_path):
+                    continue
+                    
+                try:
+                    # Extract invoice info from the PDF
+                    invoice_info = PDFProcessor.extract_invoice_info(pdf_path)
+                    if invoice_info:
+                        # Get the invoice number from inside the PDF
+                        pdf_invoice_number = invoice_info.get('invoice_number')
+                        if pdf_invoice_number == target_invoice_number:
+                            matching_request = request
+                            found_invoice_number = pdf_invoice_number
+                            break
+                except Exception as e:
+                    self.gui.log_message(f"Error extracting info from PDF {pdf_path}: {str(e)}")
+                    continue
+            
+            if not matching_request:
+                return f"{target_invoice_number} numaralı fatura bekleyen isteklerde bulunamadı. Lütfen fatura numarasını kontrol edin."
+            
+            # Get PDF path from the request
+            pdf_path = matching_request[3]  # request[3] is pdf_path
+            
+            if not os.path.exists(pdf_path):
+                return f"PDF dosyası bulunamadı: {pdf_path}"
+            
+            # Send the email using the invoice number found in the PDF
+            if self.gui.email_handler.send_receipt_to_company(email, found_invoice_number, pdf_path):
+                # Move file to processed folder after successful email sending
+                if self.gui.web_automation.mark_as_processed(pdf_path):
+                    self.gui.update_status(f"PDF dosyası işlenmiş klasörüne taşındı: {os.path.basename(pdf_path)}")
+                # Mark the request as sent in the database
+                self.gui.email_handler.mark_as_sent(found_invoice_number, email, "sent")
+                # Update pending requests tab
+                self.gui.update_pending_requests_tab()
+                return f"{found_invoice_number} numaralı fatura {email} adresine başarıyla gönderildi."
+            else:
+                return f"Email gönderimi başarısız oldu. Lütfen tekrar deneyin."
+            
+        except Exception as e:
+            return f"Email gönderimi sırasında bir hata oluştu: {str(e)}" 
