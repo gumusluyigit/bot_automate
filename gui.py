@@ -174,16 +174,26 @@ class ReceiptAutomationGUI:
             self.update_status("="*50)
             
             # Get PDFs for last week
-            pdfs = self.web_automation.search_and_download_pdf(target_week=(last_monday, last_sunday))
+            pdfs, skipped = self.web_automation.search_and_download_pdf(target_week=(last_monday, last_sunday))
             
-            if not pdfs:
-                self.log_message("No unprocessed PDFs found for the specified week")
-                self.update_status("No unprocessed PDFs found for the specified week")
+            if not pdfs and not skipped:
+                self.log_message("No PDFs found for the specified week")
+                self.update_status("No PDFs found for the specified week")
                 self.is_processing = False
                 self.update_processing_state()
                 return
                 
-            self.process_pdf_list(pdfs)
+            if skipped:
+                self.update_status("\nSkipped PDFs:")
+                for pdf_name, reason in skipped:
+                    self.update_status(f"- {pdf_name}: {reason}")
+                
+            if pdfs:
+                self.process_pdf_list(pdfs)
+            else:
+                self.update_status("\nNo new PDFs to process")
+                self.is_processing = False
+                self.update_processing_state()
             
         except Exception as e:
             self.handle_error(e)
@@ -230,16 +240,26 @@ class ReceiptAutomationGUI:
             self.update_status("="*50)
             
             # Get PDFs for selected week
-            pdfs = self.web_automation.search_and_download_pdf(target_week=(start_date, end_date))
+            pdfs, skipped = self.web_automation.search_and_download_pdf(target_week=(start_date, end_date))
             
-            if not pdfs:
-                self.log_message("No unprocessed PDFs found for the specified week")
-                self.update_status("No unprocessed PDFs found for the specified week")
+            if not pdfs and not skipped:
+                self.log_message("No PDFs found for the specified week")
+                self.update_status("No PDFs found for the specified week")
                 self.is_processing = False
                 self.update_processing_state()
                 return
                 
-            self.process_pdf_list(pdfs)
+            if skipped:
+                self.update_status("\nSkipped PDFs:")
+                for pdf_name, reason in skipped:
+                    self.update_status(f"- {pdf_name}: {reason}")
+                
+            if pdfs:
+                self.process_pdf_list(pdfs)
+            else:
+                self.update_status("\nNo new PDFs to process")
+                self.is_processing = False
+                self.update_processing_state()
             
         except Exception as e:
             self.handle_error(e)
@@ -254,9 +274,13 @@ class ReceiptAutomationGUI:
             failed = 0
             skipped = 0
             
+            # Show total PDFs found
+            self.update_status(f"Found {total} PDF(s) within target week")
+            
             for pdf_path in pdf_paths:
                 try:
-                    self.update_status(f"\nProcessing PDF ({processed + 1}/{total}): {os.path.basename(pdf_path)}")
+                    pdf_name = os.path.basename(pdf_path)
+                    self.update_status(f"\nProcessing PDF ({processed + skipped + failed + 1}/{total}): {pdf_name}")
                     
                     if not os.path.exists(pdf_path):
                         raise Exception("PDF file not found - it may have been removed")
@@ -272,9 +296,15 @@ class ReceiptAutomationGUI:
                     if not invoice_number:
                         raise Exception("Could not extract invoice number from PDF")
                     
+                    # Check if invoice is already in pending requests
+                    if self.email_handler.pending_requests and invoice_number in self.email_handler.pending_requests:
+                        self.update_status(f"Skipping {pdf_name} - Invoice {invoice_number} is already in pending requests")
+                        skipped += 1
+                        continue
+                    
                     # Check if receipt was already sent
                     if self.email_handler.check_if_sent(invoice_number):
-                        self.update_status(f"Receipt for invoice {invoice_number} was already sent - skipping")
+                        self.update_status(f"Skipping {pdf_name} - Receipt for invoice {invoice_number} was already sent")
                         skipped += 1
                         continue
                     
@@ -334,6 +364,8 @@ class ReceiptAutomationGUI:
                 self.sender_email.get(),
                 self.internal_email.get()
             )
+            # Pass email handler to web automation
+            self.web_automation.email_handler = self.email_handler
         return True
         
     def handle_error(self, error: Exception):

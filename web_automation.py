@@ -74,21 +74,22 @@ class WebAutomation:
             # This would interact with the actual web application
             return []
             
-    def _handle_test_mode_pdfs(self, target_week: tuple = None) -> list:
+    def _handle_test_mode_pdfs(self, target_week: tuple = None) -> tuple:
         """Handle PDFs in test mode"""
         downloaded_pdfs = []
+        skipped_pdfs = []  # Track skipped PDFs
         
         # Check if pdf_samples directory exists
         if not os.path.exists('pdf_samples'):
             print("Error: pdf_samples directory not found!")
             print("Please create a pdf_samples directory and add sample PDFs.")
-            return []
+            return [], []
             
         # Create downloads directory if it doesn't exist
         os.makedirs(self.download_dir, exist_ok=True)
         
         # Process each PDF in the samples directory
-        processed_invoices = set()  # Track processed invoices to avoid duplicates
+        processed_invoices = set()  # Track processed invoices to avoid duplicates within the target week
         
         for pdf_file in os.listdir('pdf_samples'):
             if not pdf_file.endswith('.pdf'):
@@ -110,60 +111,68 @@ class WebAutomation:
                 
                 # Get invoice number and period
                 invoice_number = invoice_info.get('invoice_number')
-                if not invoice_number:
-                    continue
-                    
-                # Skip if we've already processed this invoice number
-                if invoice_number in processed_invoices:
-                    print(f"Skipping duplicate invoice: {invoice_number}")
-                    continue
-                    
-                processed_invoices.add(invoice_number)
+                pdf_start = invoice_info.get('period_start')
+                pdf_end = invoice_info.get('period_end')
                 
-                # Skip if already processed
-                if os.path.exists(os.path.join('processed', pdf_file)):  # Check using original filename
-                    if target_week:  # Only show skip message if file is within target week
-                        target_start, target_end = target_week
-                        pdf_start = invoice_info['period_start']
-                        pdf_end = invoice_info['period_end']
-                        
-                        # Show skip message only if PDF period overlaps with target week
-                        if not (pdf_end < target_start or pdf_start > target_end):
-                            print(f"Skipping already processed file: {pdf_file}")
+                if not invoice_number or not pdf_start or not pdf_end:
                     continue
                 
                 # If target week is specified, check if PDF falls within that week
                 if target_week:
                     target_start, target_end = target_week
-                    pdf_start = invoice_info['period_start']
-                    pdf_end = invoice_info['period_end']
                     
-                    # Skip if PDF period doesn't overlap with target week
-                    if pdf_end < target_start or pdf_start > target_end:
+                    # Check if the PDF's period overlaps with the target week
+                    is_within_target_week = (
+                        target_start <= pdf_end and target_end >= pdf_start
+                    )
+                    
+                    if not is_within_target_week:
                         continue
                     
                     print(f"Found PDF within target week: {pdf_file}")
-                
-                # Check if PDF is already in downloads directory
-                if os.path.exists(target_path):
-                    print(f"PDF already in downloads directory: {pdf_file}")
+                    
+                    # Only check for duplicates within the target week
+                    if invoice_number in processed_invoices:
+                        print(f"Skipping duplicate invoice within selected week: {invoice_number}")
+                        skipped_pdfs.append((pdf_file, f"Duplicate invoice within selected week: {invoice_number}"))
+                        continue
+                    
+                    processed_invoices.add(invoice_number)
+                    
+                    # Check if already in pending requests (only for PDFs within target week)
+                    if hasattr(self, 'email_handler') and self.email_handler and \
+                       hasattr(self.email_handler, 'pending_requests') and \
+                       invoice_number in self.email_handler.pending_requests:
+                        print(f"Skipping PDF as it's already in pending requests: {pdf_file}")
+                        skipped_pdfs.append((pdf_file, f"Already in pending requests (Invoice: {invoice_number})"))
+                        continue
+                    
+                    # Skip if already processed
+                    if os.path.exists(os.path.join('processed', pdf_file)):
+                        print(f"Skipping already processed file: {pdf_file}")
+                        skipped_pdfs.append((pdf_file, "Already processed"))
+                        continue
+                    
+                    # Check if PDF is already in downloads directory
+                    if os.path.exists(target_path):
+                        print(f"PDF already in downloads directory: {pdf_file}")
+                        downloaded_pdfs.append(target_path)
+                        continue
+                    
+                    # Copy PDF to downloads directory with original filename
+                    shutil.copy2(source_path, target_path)
                     downloaded_pdfs.append(target_path)
-                    continue
-                
-                # Copy PDF to downloads directory with original filename
-                shutil.copy2(source_path, target_path)
-                downloaded_pdfs.append(target_path)
-                print(f"Copied PDF to: {target_path}")
+                    print(f"Copied PDF to: {target_path}")
                     
             except Exception as e:
                 print(f"Error processing {pdf_file}: {str(e)}")
                 continue
                 
-        if not downloaded_pdfs and target_week:
+        if not downloaded_pdfs and not skipped_pdfs and target_week:
             target_start, target_end = target_week
             print(f"No unprocessed PDFs found for the specified week")
                 
-        return downloaded_pdfs
+        return downloaded_pdfs, skipped_pdfs
         
     def mark_as_processed(self, pdf_path: str):
         """Mark a PDF as processed by moving it to processed directory"""

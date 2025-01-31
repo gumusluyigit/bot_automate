@@ -1,17 +1,13 @@
 import os
 from pdf_processor import PDFProcessor
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
 from datetime import datetime, timedelta
 import re
 from email_handler import EmailHandler
+from rapidfuzz import fuzz, process
 
 class Chatbot:
-    def __init__(self):
-        self.model = AutoModelForCausalLM.from_pretrained("microsoft/DialoGPT-small")
-        self.tokenizer = AutoTokenizer.from_pretrained("microsoft/DialoGPT-small")
-        self.chat_history_ids = None
-        self.gui = None  # Will be set by GUI
+    def __init__(self, gui=None):
+        self.gui = gui
         
         # Turkish month names and their variations
         self.turkish_months = {
@@ -29,10 +25,35 @@ class Chatbot:
             'aralık': 12, 'ara': 12, 'aralik': 12, '12': 12
         }
         
-        print("Initializing chatbot... This may take a moment.")
+        # Common command patterns with variations
+        self.command_patterns = [
+            "işle", "isle", "islemek", "process", "proccess",
+            "fatura", "fturalar", "faturalar",
+            "pdf", "pdfs", "pdfler", "pdfları",
+            "dosya", "dosyalar", "dosyalari",
+            "belge", "belgeler", "belgeleri",
+            "hafta", "haftanın", "haftasının",
+            "geçen", "gecen", "gçn",
+            "arası", "arasında", "arasnda"
+        ]
+        
         self.processed_dir = 'processed'
         self.samples_dir = 'pdf_samples'
-        print("Chatbot initialized!")
+        
+        # Common responses for basic interactions
+        self.responses = {
+            'greeting': "Merhaba! Size nasıl yardımcı olabilirim?",
+            'how_are_you': "İyiyim, teşekkür ederim! Size nasıl yardımcı olabilirim?",
+            'help': ("Size PDF işleme konusunda yardımcı olabilirim. Örnek komutlar:\n\n"
+                    "- 'Geçen haftanın faturalarını işle'\n"
+                    "- '15 Ocak 2025 haftasının PDFlerini işle'\n"
+                    "- 'Bu haftanın belgelerini işle'\n"
+                    "- '15/01/2025 - 21/01/2025 arası PDFleri işle'"),
+            'thanks': "Rica ederim! Başka bir konuda yardımcı olabilir miyim?",
+            'goodbye': "Görüşmek üzere! Başka bir işleminiz olursa yardımcı olmaktan memnuniyet duyarım.",
+            'status': "Durum bilgisini kontrol ediyorum...",
+            'error': "Üzgünüm, bir hata oluştu. Lütfen tekrar deneyin."
+        }
 
     def set_gui(self, gui):
         """Set the GUI reference for callback functions"""
@@ -75,39 +96,55 @@ class Chatbot:
         return None
         
     def extract_date_range(self, text):
-        """Extract date range from text"""
+        """Extract date range from text with typo tolerance"""
         text = text.lower()
         
-        # Check for "last week" or "previous week"
-        if "geçen hafta" in text or "önceki hafta" in text:
+        # Common typo variations for date-related words
+        date_keywords = {
+            "geçen hafta": ["geçen hfta", "gecen hafta", "gçn hafta", "geçn hfta"],
+            "bu hafta": ["bu hfta", "b hafta", "bu hfata"],
+            "önceki hafta": ["onceki hafta", "öncki hfta", "oncki hafta"],
+            "arası": ["arasi", "aras", "arasinda", "arasnda"],
+            "haftası": ["haftasi", "haftasnn", "hftası", "hftasi"]
+        }
+        
+        # Fix common typos in the text
+        for correct_form, variations in date_keywords.items():
+            # Use fuzzy matching to find the best match among variations
+            result = process.extractOne(text, variations + [correct_form], scorer=fuzz.partial_ratio)
+            if result and result[1] > 80:
+                text = text.replace(result[0], correct_form)
+        
+        # Check for "last week" or "previous week" with fuzzy matching
+        if any(fuzz.partial_ratio(word, text) > 80 for word in ["geçen hafta", "önceki hafta"]):
             today = datetime.now()
             monday = today - timedelta(days=today.weekday() + 7)
             sunday = monday + timedelta(days=6)
             return monday, sunday
             
-        # Check for "this week"
-        if "bu hafta" in text:
+        # Check for "this week" with fuzzy matching
+        if any(fuzz.partial_ratio("bu hafta", part) > 80 for part in text.split()):
             today = datetime.now()
             monday = today - timedelta(days=today.weekday())
             sunday = monday + timedelta(days=6)
             return monday, sunday
             
-        # Check for "X haftası" format (week of X)
-        hafta_match = re.search(r'(\d{1,2}\s+[a-zışğüçö]+\s+\d{4})\s*haftas[ıi]', text)
+        # Check for "X haftası" format with fuzzy matching
+        hafta_pattern = r'(\d{1,2}\s+[a-zışğüçö]+\s+\d{4})\s*h[af]*t[aı]s[ıi]'
+        hafta_match = re.search(hafta_pattern, text)
         if hafta_match:
             date_str = hafta_match.group(1)
             start_date = self.parse_date(date_str)
             if start_date:
-                # If the given date is not Monday, find the Monday of that week
                 if start_date.weekday() != 0:
                     start_date = start_date - timedelta(days=start_date.weekday())
                 end_date = start_date + timedelta(days=6)
                 return start_date, end_date
             
-        # Look for date range with separator
+        # Look for date range with separator (with fuzzy matching for separators)
         separators = [" - ", " ile ", " arası ", " arasındaki ", " dan ", " den "]
         for sep in separators:
-            if sep in text:
+            if any(fuzz.partial_ratio(sep.strip(), part) > 80 for part in text.split()):
                 parts = text.split(sep)
                 if len(parts) == 2:
                     start_date = self.parse_date(parts[0])
@@ -115,28 +152,44 @@ class Chatbot:
                     if start_date and end_date:
                         return start_date, end_date
         
-        # Try to find a single date (will use whole week)
+        # Try to find a single date
         date = self.parse_date(text)
         if date:
-            # If a single date is found, use its week
             monday = date - timedelta(days=date.weekday())
             sunday = monday + timedelta(days=6)
             return monday, sunday
             
         return None, None
         
+    def _format_date_turkish(self, date):
+        """Format a date in Turkish"""
+        turkish_month_names = {
+            1: "Ocak", 2: "Şubat", 3: "Mart", 4: "Nisan",
+            5: "Mayıs", 6: "Haziran", 7: "Temmuz", 8: "Ağustos",
+            9: "Eylül", 10: "Ekim", 11: "Kasım", 12: "Aralık"
+        }
+        return f"{date.day} {turkish_month_names[date.month]} {date.year}"
+
     def process_command(self, text):
-        """Process commands related to PDF processing"""
-        text = text.lower()
+        """Process commands related to PDF processing with typo tolerance"""
+        text = text.lower().strip()
         
-        # Check if this is a PDF processing request
-        process_keywords = ["işle", "isle", "process", "fatura", "pdf", "dosya", "belgeler"]
-        is_process_request = any(keyword in text for keyword in process_keywords)
+        # Known command templates
+        command_templates = [
+            "geçen haftanın faturalarını işle",
+            "geçen hafta pdfleri işle",
+            "bu haftanın belgelerini işle",
+            "bu hafta pdfleri işle",
+            "haftasının pdflerini işle",
+            "arası pdfleri işle"
+        ]
         
-        if not is_process_request:
+        # First, try to match the overall command structure
+        result = process.extractOne(text, command_templates, scorer=fuzz.partial_ratio)
+        if not result or result[1] <= 75:  # If no good match found, return None to fall back to help message
             return None
             
-        # Extract date range
+        # Extract date range with typo tolerance
         start_date, end_date = self.extract_date_range(text)
         if not start_date or not end_date:
             return ("Tarih aralığını anlayamadım. İşte bazı örnek kullanımlar:\n\n" + \
@@ -145,6 +198,9 @@ class Chatbot:
                    "- '15 Ocak 2025 haftasının PDFlerini işle'\n" + \
                    "- 'Bu haftanın belgelerini işle'\n" + \
                    "- '15/01/2025 - 21/01/2025 arası PDFleri işle'")
+        
+        # Format date range for messages in Turkish
+        date_range = f"{self._format_date_turkish(start_date)} - {self._format_date_turkish(end_date)}"
         
         # Check if GUI reference exists
         if not self.gui:
@@ -170,25 +226,42 @@ class Chatbot:
                 )
             
             # Log the operation
-            self.gui.log_message(f"Processing PDFs for week {start_date.strftime('%d %B %Y')} to {end_date.strftime('%d %B %Y')}")
+            self.gui.log_message(f"Processing PDFs for week {date_range}")
             self.gui.update_status("="*50)
-            self.gui.update_status(f"Processing PDFs for Week: {start_date.strftime('%d %B %Y')} "
-                                f"to {end_date.strftime('%d %B %Y')}")
+            self.gui.update_status(f"Processing PDFs for Week: {date_range}")
             self.gui.update_status("="*50)
             
             # Get PDFs for the date range
-            pdfs = self.gui.web_automation.search_and_download_pdf(target_week=(start_date, end_date))
+            pdfs, skipped = self.gui.web_automation.search_and_download_pdf(target_week=(start_date, end_date))
             
-            if not pdfs:
-                self.gui.log_message("No unprocessed PDFs found for the specified week")
-                self.gui.update_status("No unprocessed PDFs found for the specified week")
+            if not pdfs and not skipped:
+                self.gui.log_message(f"No PDFs found for {date_range}")
+                self.gui.update_status(f"No PDFs found for {date_range}")
                 self.gui.is_processing = False
                 self.gui.update_processing_state()
-                return "Bu tarih aralığında işlenmemiş PDF bulunamadı."
+                return f"{date_range} aralığında hiç PDF bulunamadı."
                 
-            # Process the PDFs
-            self.gui.process_pdf_list(pdfs)
-            return "PDF işleme tamamlandı. Detaylar için durum panelini kontrol edin."
+            skipped_count = len(skipped) if skipped else 0
+            skipped_message = ""
+            
+            if skipped:
+                self.gui.update_status("\nSkipped PDFs:")
+                skipped_message = "\n\nAtlanan PDFler:"
+                for pdf_name, reason in skipped:
+                    self.gui.update_status(f"- {pdf_name}: {reason}")
+                    skipped_message += f"\n- {pdf_name}: {reason}"
+            
+            if pdfs:
+                # Process the PDFs
+                self.gui.process_pdf_list(pdfs)
+                return f"{date_range} aralığında {len(pdfs)} PDF işlendi.{skipped_message}\nDetaylar için durum panelini kontrol edin."
+            else:
+                self.gui.is_processing = False
+                self.gui.update_processing_state()
+                if skipped:
+                    return f"{date_range} aralığında işlenecek yeni PDF bulunamadı.{skipped_message}"
+                else:
+                    return f"{date_range} aralığında hiç PDF bulunamadı."
             
         except Exception as e:
             self.gui.handle_error(e)
@@ -196,35 +269,69 @@ class Chatbot:
             self.gui.update_processing_state()
             return f"PDF işleme sırasında bir hata oluştu: {str(e)}"
         
-    def get_response(self, user_input):
-        """Get response from the chatbot"""
-        # First try to process as a command
-        command_response = self.process_command(user_input)
-        if command_response:
+    def get_response(self, text):
+        """Main entry point for getting responses"""
+        if not text:
+            return self.responses['greeting']
+            
+        text = text.lower().strip()
+        
+        # Check for basic interactions first
+        if self._is_greeting(text):
+            return self._handle_greeting(text)
+        elif self._is_thanks(text):
+            return self.responses['thanks']
+        elif self._is_goodbye(text):
+            return self.responses['goodbye']
+        elif self._is_help(text):
+            return self.responses['help']
+        elif self._is_status_request(text):
+            return self._get_status_info()
+            
+        # If no basic interaction matches, try to process as a command
+        command_response = self.process_command(text)
+        if command_response is not None:
             return command_response
             
-        # If not a command, use DialoGPT for general conversation
-        new_user_input_ids = self.tokenizer.encode(user_input + self.tokenizer.eos_token, return_tensors='pt')
+        # If nothing matches, return help message
+        return self.responses['help']
         
-        if self.chat_history_ids is not None:
-            bot_input_ids = torch.cat([self.chat_history_ids, new_user_input_ids], dim=-1)
-        else:
-            bot_input_ids = new_user_input_ids
-            
-        self.chat_history_ids = self.model.generate(
-            bot_input_ids,
-            max_length=1000,
-            pad_token_id=self.tokenizer.eos_token_id,
-            no_repeat_ngram_size=3,
-            do_sample=True,
-            top_k=100,
-            top_p=0.7,
-            temperature=0.8
-        )
+    def _is_greeting(self, text):
+        """Check if the message is a greeting using fuzzy matching"""
+        greetings = ["hi", "hello", "merhaba", "selam", "hey", "how are you", "nasılsın"]
+        result = process.extractOne(text, greetings)
+        return result[1] > 80 if result else False
         
-        response = self.tokenizer.decode(self.chat_history_ids[:, bot_input_ids.shape[-1]:][0], skip_special_tokens=True)
-        return response
+    def _handle_greeting(self, text):
+        """Handle greeting messages"""
+        if "how are you" in text or "nasılsın" in text:
+            return self.responses['how_are_you']
+        return self.responses['greeting']
         
+    def _is_thanks(self, text):
+        """Check if the message is expressing thanks using fuzzy matching"""
+        thanks_words = ["teşekkür", "tesekkur", "thanks", "thank you", "sağol", "sagol", "tşk"]
+        result = process.extractOne(text, thanks_words)
+        return result[1] > 80 if result else False
+        
+    def _is_goodbye(self, text):
+        """Check if the message is a goodbye using fuzzy matching"""
+        goodbye_words = ["güle güle", "hoşça kal", "görüşürüz", "bye", "goodbye", "see you", "bb", "by"]
+        result = process.extractOne(text, goodbye_words)
+        return result[1] > 80 if result else False
+        
+    def _is_help(self, text):
+        """Check if the message is asking for help using fuzzy matching"""
+        help_words = ["help", "yardım", "nasıl", "örnek", "komut", "yrdm"]
+        result = process.extractOne(text, help_words)
+        return result[1] > 80 if result else False
+        
+    def _is_status_request(self, text):
+        """Check if the message is asking for status using fuzzy matching"""
+        status_words = ["status", "durum", "rapor", "report", "drm"]
+        result = process.extractOne(text, status_words)
+        return result[1] > 80 if result else False
+
     def reset_chat(self):
         """Reset the chat history"""
         self.chat_history_ids = None
@@ -345,4 +452,27 @@ class Chatbot:
                    f"- Total PDFs: {processed_count + pending_count}")
                    
         except Exception as e:
-            return f"Error retrieving status information: {str(e)}" 
+            return f"Error retrieving status information: {str(e)}"
+
+    def process_message(self, text):
+        """Main entry point for processing user messages"""
+        if not text:
+            return "Merhaba! Size nasıl yardımcı olabilirim?"
+            
+        text = text.lower().strip()
+        
+        # Handle greetings
+        if self._is_greeting(text):
+            return self._handle_greeting(text)
+            
+        # Handle PDF processing commands
+        pdf_response = self.process_command(text)
+        if pdf_response is not None:
+            return pdf_response
+            
+        # Handle general queries
+        return ("Size PDF işleme konusunda yardımcı olabilirim. Örnek komutlar:\n\n"
+               "- 'Geçen haftanın faturalarını işle'\n"
+               "- '15 Ocak 2025 haftasının PDFlerini işle'\n"
+               "- 'Bu haftanın belgelerini işle'\n"
+               "- '15/01/2025 - 21/01/2025 arası PDFleri işle'") 
