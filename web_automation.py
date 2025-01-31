@@ -84,11 +84,8 @@ class WebAutomation:
             print("Please create a pdf_samples directory and add sample PDFs.")
             return []
             
-        # Clean up downloads directory first
-        if os.path.exists(self.download_dir):
-            for file in os.listdir(self.download_dir):
-                if file.endswith('.pdf'):
-                    os.remove(os.path.join(self.download_dir, file))
+        # Create downloads directory if it doesn't exist
+        os.makedirs(self.download_dir, exist_ok=True)
         
         # Process each PDF in the samples directory
         processed_invoices = set()  # Track processed invoices to avoid duplicates
@@ -147,6 +144,12 @@ class WebAutomation:
                     
                     print(f"Found PDF within target week: {pdf_file}")
                 
+                # Check if PDF is already in downloads directory
+                if os.path.exists(target_path):
+                    print(f"PDF already in downloads directory: {pdf_file}")
+                    downloaded_pdfs.append(target_path)
+                    continue
+                
                 # Copy PDF to downloads directory with original filename
                 shutil.copy2(source_path, target_path)
                 downloaded_pdfs.append(target_path)
@@ -158,7 +161,7 @@ class WebAutomation:
                 
         if not downloaded_pdfs and target_week:
             target_start, target_end = target_week
-            print(f"No unprocessed PDFs found for period {target_start.strftime('%Y-%m-%d')} to {target_end.strftime('%Y-%m-%d')}")
+            print(f"No unprocessed PDFs found for the specified week")
                 
         return downloaded_pdfs
         

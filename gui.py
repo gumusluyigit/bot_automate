@@ -177,8 +177,8 @@ class ReceiptAutomationGUI:
             pdfs = self.web_automation.search_and_download_pdf(target_week=(last_monday, last_sunday))
             
             if not pdfs:
-                self.log_message("No unprocessed PDFs found for last week")
-                self.update_status("No unprocessed PDFs found for last week")
+                self.log_message("No unprocessed PDFs found for the specified week")
+                self.update_status("No unprocessed PDFs found for the specified week")
                 self.is_processing = False
                 self.update_processing_state()
                 return
@@ -233,8 +233,8 @@ class ReceiptAutomationGUI:
             pdfs = self.web_automation.search_and_download_pdf(target_week=(start_date, end_date))
             
             if not pdfs:
-                self.log_message("No unprocessed PDFs found for selected week")
-                self.update_status("No unprocessed PDFs found for selected week")
+                self.log_message("No unprocessed PDFs found for the specified week")
+                self.update_status("No unprocessed PDFs found for the specified week")
                 self.is_processing = False
                 self.update_processing_state()
                 return
