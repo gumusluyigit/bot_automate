@@ -6,22 +6,78 @@ from datetime import datetime
 import sqlite3
 import os
 import json
-from database_handler import DatabaseHandler
 
 class EmailHandler:
-    def __init__(self, sender_email: str, internal_email: str, db_path=r"C:\SharedDB\pending_requests.db"):
+    def __init__(self, sender_email: str, internal_email: str, db_path=None):
         self.sender_email = sender_email
         self.internal_email = internal_email
-        self.db = DatabaseHandler(db_path)
+        self.db_path = db_path or os.path.join(os.path.dirname(os.path.abspath(__file__)), 'db', 'pending_requests.db')
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         
         # Initialize database
-        self.db_path = r'C:\SharedDB\invoice_emails.db'
-        self.init_database()
+        self.init_db()
         
         # Gmail SMTP settings
         self.smtp_server = "smtp.gmail.com"
         self.smtp_port = 587
         self.app_password = None  # Will be set through save_credentials
+        
+    def init_db(self):
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # Create invoice_emails table to store known email mappings
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS invoice_emails (
+            invoice_number TEXT PRIMARY KEY,
+            email_address TEXT NOT NULL,
+            company_name TEXT,
+            added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        ''')
+        
+        # Create invoice_details table to store PDF content information
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS invoice_details (
+            invoice_number TEXT PRIMARY KEY,
+            company_name TEXT NOT NULL,
+            period_start DATE,
+            period_end DATE,
+            due_date DATE,
+            amount_due DECIMAL(10,2),
+            currency TEXT,
+            pdf_path TEXT,
+            processed_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        ''')
+        
+        # Create pending_requests table if it doesn't exist
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS pending_requests (
+            invoice_number TEXT PRIMARY KEY,
+            company_name TEXT,
+            pdf_path TEXT,
+            period_start TEXT,
+            period_end TEXT,
+            status TEXT DEFAULT 'pending',
+            content_summary TEXT
+        )
+        ''')
+        
+        # Create sent_emails table if it doesn't exist
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS sent_emails (
+            invoice_number TEXT PRIMARY KEY,
+            email TEXT,
+            company_name TEXT,
+            status TEXT,
+            sent_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            pdf_path TEXT
+        )
+        ''')
+        
+        conn.commit()
+        conn.close()
         
     def save_credentials(self, app_password: str):
         """Save Gmail App Password"""
@@ -55,53 +111,61 @@ class EmailHandler:
         try:
             if not self.app_password:
                 if not self._load_credentials():
-                    raise Exception("No credentials configured")
+                    raise Exception(
+                        "No credentials configured. Please make sure to:\n"
+                        "1. Enter your Gmail address\n"
+                        "2. Generate an App Password (NOT your regular Gmail password)\n"
+                        "To generate an App Password:\n"
+                        "1. Go to your Google Account settings\n"
+                        "2. Enable 2-Step Verification if not already enabled\n"
+                        "3. Go to Security → App Passwords\n"
+                        "4. Select 'Mail' and your device\n"
+                        "5. Use the generated 16-character password"
+                    )
+                    
+            if not self.sender_email or '@gmail.com' not in self.sender_email.lower():
+                raise Exception(
+                    "Invalid Gmail address. Please make sure to:\n"
+                    "1. Use a complete Gmail address (example@gmail.com)\n"
+                    "2. Only Gmail addresses are supported"
+                )
                     
             server = smtplib.SMTP(self.smtp_server, self.smtp_port)
             server.starttls()
-            server.login(self.sender_email, self.app_password)
+            
+            try:
+                server.login(self.sender_email, self.app_password)
+            except smtplib.SMTPAuthenticationError:
+                raise Exception(
+                    "Authentication failed. Please make sure:\n"
+                    "1. You're using an App Password, NOT your regular Gmail password\n"
+                    "2. 2-Step Verification is enabled on your Google Account\n"
+                    "3. The App Password was generated for 'Mail' access\n"
+                    "4. You've copied the 16-character App Password correctly\n"
+                    "\nTo generate a new App Password:\n"
+                    "1. Go to Google Account → Security\n"
+                    "2. Find 'App Passwords' under 2-Step Verification\n"
+                    "3. Generate a new password for 'Mail'"
+                )
+                
             server.quit()
             return True
+            
         except Exception as e:
             print(f"Authentication error: {str(e)}")
             return False
     
-    def init_database(self):
-        """Initialize SQLite database for storing invoice-email mappings"""
+    def get_email_for_invoice(self, invoice_number: str) -> tuple:
+        """Get email address and company name for invoice number from database"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS invoice_emails (
-                invoice_number TEXT PRIMARY KEY,
-                email_address TEXT NOT NULL,
-                added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS sent_emails (
-                invoice_number TEXT PRIMARY KEY,
-                email_address TEXT NOT NULL,
-                sent_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                pdf_path TEXT
-            )
-        ''')
-        
-        conn.commit()
-        conn.close()
-    
-    def get_email_from_database(self, invoice_number: str) -> str:
-        """Get email address for invoice number from database"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        cursor.execute('SELECT email_address FROM invoice_emails WHERE invoice_number = ?', 
+        cursor.execute('SELECT email_address, company_name FROM invoice_emails WHERE invoice_number = ?', 
                       (invoice_number,))
         result = cursor.fetchone()
         
         conn.close()
-        return result[0] if result else None
+        return result if result else (None, None)
     
     def save_email_to_database(self, invoice_number: str, email_address: str):
         """Save or update email address for invoice number"""
@@ -262,22 +326,115 @@ class EmailHandler:
             print(f"Error checking responses: {str(e)}")
             return None
 
-    def add_to_pending(self, invoice_number, company_name, pdf_path, period_start=None, period_end=None):
-        """Add an invoice to pending requests"""
-        return self.db.add_pending_request(invoice_number, company_name, pdf_path, period_start, period_end)
-        
     def get_pending_requests(self):
         """Get all pending requests"""
-        return self.db.get_pending_requests()
-        
-    def update_email(self, invoice_number, email):
-        """Update email for a pending request"""
-        return self.db.update_email(invoice_number, email)
-        
-    def is_invoice_pending(self, invoice_number):
-        """Check if an invoice is already in pending requests"""
-        return self.db.is_invoice_pending(invoice_number)
-        
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT invoice_number, company_name, pdf_path, period_start, period_end, status
+                FROM pending_requests
+                WHERE status = 'pending'
+                ORDER BY invoice_number
+            ''')
+            
+            results = cursor.fetchall()
+            conn.close()
+            
+            return results
+        except Exception as e:
+            print(f"Error getting pending requests: {str(e)}")
+            return []
+            
+    def add_to_pending(self, invoice_number: str, company_name: str, pdf_path: str,
+                      period_start: str, period_end: str) -> bool:
+        """Add a request to pending requests"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                INSERT OR REPLACE INTO pending_requests 
+                (invoice_number, company_name, pdf_path, period_start, period_end, status)
+                VALUES (?, ?, ?, ?, ?, 'pending')
+            ''', (invoice_number, company_name, pdf_path, period_start, period_end))
+            
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"Error adding to pending requests: {str(e)}")
+            return False
+            
+    def mark_as_sent(self, invoice_number: str, email: str, status: str = 'sent') -> bool:
+        """Mark a request as sent"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Get request details before deleting
+            cursor.execute('SELECT company_name, pdf_path FROM pending_requests WHERE invoice_number = ?', 
+                         (invoice_number,))
+            result = cursor.fetchone()
+            
+            if not result:
+                return False
+                
+            company_name, pdf_path = result
+            
+            # Add to sent_emails
+            cursor.execute('''
+                INSERT OR REPLACE INTO sent_emails 
+                (invoice_number, email, company_name, status, pdf_path)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (invoice_number, email, company_name, status, pdf_path))
+            
+            # Remove from pending_requests
+            cursor.execute('DELETE FROM pending_requests WHERE invoice_number = ?', 
+                         (invoice_number,))
+            
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"Error marking as sent: {str(e)}")
+            return False
+            
+    def is_invoice_pending(self, invoice_number: str) -> bool:
+        """Check if an invoice is in pending requests"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute('SELECT 1 FROM pending_requests WHERE invoice_number = ?', 
+                         (invoice_number,))
+            
+            result = cursor.fetchone() is not None
+            conn.close()
+            
+            return result
+        except Exception as e:
+            print(f"Error checking pending status: {str(e)}")
+            return False
+            
+    def check_if_sent(self, invoice_number: str) -> bool:
+        """Check if an invoice has been sent"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute('SELECT 1 FROM sent_emails WHERE invoice_number = ?', 
+                         (invoice_number,))
+            
+            result = cursor.fetchone() is not None
+            conn.close()
+            
+            return result
+        except Exception as e:
+            print(f"Error checking sent status: {str(e)}")
+            return False
+
     def send_email(self, to_email, subject, body, attachments=None):
         """Send an email with optional attachments"""
         try:
@@ -326,4 +483,201 @@ class EmailHandler:
         
     def get_email_history(self, invoice_number=None):
         """Get email sending history"""
-        return self.db.get_email_history(invoice_number) 
+        return self.db.get_email_history(invoice_number)
+
+    def send_email_directly(self, invoice_number: str, pdf_path: str, company_name: str, email: str) -> bool:
+        """Send email directly for known invoice numbers"""
+        try:
+            if not self.app_password:
+                if not self._load_credentials():
+                    return False
+                    
+            # Create email message
+            msg = MIMEMultipart()
+            msg['From'] = self.sender_email
+            msg['To'] = email
+            msg['Subject'] = f"Invoice from {company_name}"
+            
+            # Attach PDF
+            with open(pdf_path, 'rb') as f:
+                pdf = MIMEApplication(f.read(), _subtype='pdf')
+                pdf.add_header('Content-Disposition', 'attachment', filename=os.path.basename(pdf_path))
+                msg.attach(pdf)
+            
+            # Send email
+            server = smtplib.SMTP(self.smtp_server, self.smtp_port)
+            server.starttls()
+            server.login(self.sender_email, self.app_password)
+            server.send_message(msg)
+            server.quit()
+            
+            # Record in sent_emails
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO sent_emails (invoice_number, email, company_name, status, pdf_path)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (invoice_number, email, company_name, 'sent', pdf_path))
+            conn.commit()
+            conn.close()
+            
+            return True
+        except Exception as e:
+            print(f"Error sending email: {str(e)}")
+            return False
+
+    def get_company_due_date(self, company_name: str) -> str:
+        """Get the latest due date for a company"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT due_date 
+            FROM invoice_details 
+            WHERE company_name = ? 
+            ORDER BY due_date DESC 
+            LIMIT 1
+        ''', (company_name,))
+        
+        result = cursor.fetchone()
+        conn.close()
+        
+        return result[0] if result else None
+
+    def get_company_amount_due(self, company_name: str, start_date: str, end_date: str) -> tuple:
+        """Get amount due for a company within a specific period"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # First try to get amount from invoice_details
+            cursor.execute('''
+                SELECT amount_due, currency 
+                FROM invoice_details 
+                WHERE company_name = ? 
+                AND (
+                    (period_start <= ? AND period_end >= ?) OR
+                    (period_start <= ? AND period_end >= ?) OR
+                    (period_start >= ? AND period_end <= ?)
+                )
+                ORDER BY processed_date DESC
+                LIMIT 1
+            ''', (company_name, end_date, start_date, end_date, start_date, start_date, end_date))
+            
+            result = cursor.fetchone()
+            
+            if not result:
+                # If not found in invoice_details, check pending_requests
+                cursor.execute('''
+                    SELECT i.amount_due, i.currency
+                    FROM pending_requests p
+                    JOIN invoice_details i ON p.invoice_number = i.invoice_number
+                    WHERE p.company_name = ? 
+                    AND (
+                        (p.period_start <= ? AND p.period_end >= ?) OR
+                        (p.period_start <= ? AND p.period_end >= ?) OR
+                        (p.period_start >= ? AND p.period_end <= ?)
+                    )
+                    ORDER BY i.processed_date DESC
+                    LIMIT 1
+                ''', (company_name, end_date, start_date, end_date, start_date, start_date, end_date))
+                
+                result = cursor.fetchone()
+            
+            conn.close()
+            return result if result else (None, None)
+            
+        except Exception as e:
+            print(f"Error getting amount due: {str(e)}")
+            return (None, None)
+
+    def get_company_email(self, company_name: str) -> str:
+        """Get the email address for a company"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT DISTINCT email_address 
+            FROM invoice_emails 
+            WHERE company_name = ? 
+            ORDER BY added_date DESC 
+            LIMIT 1
+        ''', (company_name,))
+        
+        result = cursor.fetchone()
+        conn.close()
+        
+        return result[0] if result else None
+
+    def store_invoice_details(self, invoice_number: str, company_name: str, 
+                            period_start: str, period_end: str, due_date: str, 
+                            amount_due: float, currency: str, pdf_path: str) -> bool:
+        """Store invoice details in the database"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                INSERT OR REPLACE INTO invoice_details 
+                (invoice_number, company_name, period_start, period_end, 
+                 due_date, amount_due, currency, pdf_path)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (invoice_number, company_name, period_start, period_end, 
+                 due_date, amount_due, currency, pdf_path))
+            
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"Error storing invoice details: {str(e)}")
+            return False
+
+    def get_pdf_path_for_invoice(self, invoice_number: str) -> str:
+        """Get the PDF file path for a given invoice number"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Get PDF path from pending_requests table
+            cursor.execute("""
+                SELECT pdf_path FROM pending_requests 
+                WHERE invoice_number = ? AND status = 'pending'
+            """, (invoice_number,))
+            
+            result = cursor.fetchone()
+            conn.close()
+            
+            if result:
+                return result[0]
+            return None
+            
+        except Exception as e:
+            print(f"Error getting PDF path: {str(e)}")
+            return None
+
+    def get_invoice_period(self, company_name: str, start_date: str, end_date: str) -> tuple:
+        """Get the actual invoice period for a company within a date range"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT period_start, period_end FROM pending_requests 
+                WHERE company_name = ? 
+                AND (
+                    (period_start <= ? AND period_end >= ?) OR
+                    (period_start <= ? AND period_end >= ?) OR
+                    (period_start >= ? AND period_end <= ?)
+                )
+                ORDER BY period_start ASC
+                LIMIT 1
+            """, (company_name, end_date, start_date, end_date, start_date, start_date, end_date))
+            result = cursor.fetchone()
+            conn.close()
+            
+            if result:
+                return result[0], result[1]
+            return None
+            
+        except Exception as e:
+            print(f"Error getting invoice period: {str(e)}")
+            return None 

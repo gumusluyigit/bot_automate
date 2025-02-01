@@ -1,44 +1,56 @@
-# Receipt Email Automation
+# Receipt Automation System
 
-A Python application that automates the process of downloading PDF receipts and sending them to companies via email.
+A Python-based system for automating the processing of PDF invoices and managing email communications.
 
 ## Features
 
-- GUI interface for easy interaction
-- Automated PDF receipt processing
-- Email management with Gmail integration
-- Date-based receipt processing
-- Pending requests tracking
-- Activity logging
-- Test mode for development
+- PDF invoice processing and data extraction
+- Automated email handling with Gmail integration
+- Invoice data storage and management
+- User-friendly GUI interface
+- Chat interface for querying invoice information
+- Support for Turkish language queries
 
 ## Requirements
 
 - Python 3.8+
-- Required packages listed in `requirements.txt`
+- PyPDF2
+- tkinter
+- tkcalendar
+- sqlite3
+- O365 (for Microsoft integration)
 
 ## Installation
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/gumusluyigit/bot_automate.git
-cd bot_automate
+git clone [repository-url]
+cd receipt-automation
 ```
 
-2. Install required packages:
+2. Create and activate a virtual environment:
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
+
+3. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-3. Create a `.env` file based on `.env.example` and fill in your configuration:
-```bash
-cp .env.example .env
-```
+## Configuration
 
-4. Configure your Gmail account:
-   - Enable 2-Step Verification
-   - Generate an App Password
-   - Add the App Password to the settings in the application
+1. Gmail Setup:
+   - Enable 2-Step Verification in your Google Account
+   - Generate an App Password for the application
+   - Configure the email settings in the application
+
+2. Directory Setup:
+   - The system will automatically create necessary directories:
+     - `downloads/`: For temporary storage of downloaded PDFs
+     - `processed/`: For processed PDFs
+     - `db/`: For SQLite database storage
 
 ## Usage
 
@@ -47,42 +59,26 @@ cp .env.example .env
 python gui.py
 ```
 
-2. Configure Settings:
-   - Enter your Gmail address
-   - Enter your Gmail App Password
-   - Enter the internal department email
+2. Main Features:
+   - Process PDFs by week
+   - View and manage pending requests
+   - Send emails with processed invoices
+   - Query invoice information via chat interface
 
-3. Process Receipts:
-   - Select a date to process receipts for that week
-   - Or use "Process All Unprocessed PDFs"
-   - Monitor progress in the status window
+3. Chat Commands:
+   - Check amount due: "[company] şirketinin [date] haftasının borcu"
+   - Check email: "[company] şirketinin mail adresi"
+   - Check due date: "[company] şirketinin son ödeme günü"
+   - Process PDFs: "[date] haftasının pdflerini işle"
 
-4. Track Pending Requests:
-   - View pending email requests
-   - Check for responses
-   - Monitor email sending status
+## Database Structure
 
-5. View Logs:
-   - Track all activities
-   - Export logs for analysis
-   - Clear logs when needed
-
-## Project Structure
-
-- `gui.py`: Main GUI application
-- `web_automation.py`: Web automation for PDF downloads
-- `pdf_processor.py`: PDF processing and data extraction
-- `email_handler.py`: Email management and sending
-- `database.py`: Database operations
-- `config.py`: Configuration management
-
-## Development
-
-To run in test mode:
-1. Create a `pdf_samples` directory
-2. Add sample PDF files
-3. Run the application normally - it will detect test mode
+The system uses SQLite with the following main tables:
+- `invoice_emails`: Stores email mappings
+- `invoice_details`: Stores PDF content information
+- `pending_requests`: Manages pending email requests
+- `sent_emails`: Tracks sent emails
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+[Your License Here]

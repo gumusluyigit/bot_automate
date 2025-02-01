@@ -20,9 +20,30 @@ wheels/
 .installed.cfg
 *.egg
 
-# Environment variables and credentials
-.env
+# Virtual Environment
+venv/
+ENV/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Project specific
 gmail_config.json
+automation_log.txt
+db/
+processed/
+downloads/
+*.pdf
+*.log
+
+# Environment variables
+.env
+
+# Environment variables and credentials
 settings.json
 
 # Database
@@ -32,7 +53,6 @@ receipts.db
 
 # Logs
 *.log
-automation_log.txt
 logs_export_*.txt
 
 # PDF files
@@ -40,8 +60,4 @@ pdf_samples/
 downloads/
 
 # IDE specific files
-.idea/
-.vscode/
-*.swp
-*.swo
 .DS_Store 

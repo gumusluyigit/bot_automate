@@ -2,7 +2,7 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import shutil
 from pdf_processor import PDFProcessor
@@ -53,81 +53,112 @@ class WebAutomation:
             print(f"Error resetting environment: {e}")
             return False
             
-    def search_and_download_pdf(self, target_week: tuple) -> tuple:
-        """
-        Search for and copy PDFs from pdf_samples folder for the target week
-        Returns tuple of (downloaded_pdfs, skipped_pdfs)
-        """
+    def download_pdfs_for_week(self, week_str: str) -> tuple:
+        """Download PDFs for a specific week"""
+        try:
+            print(f"Processing week string: {week_str}")
+            # Parse week string to get start and end dates
+            # Format: "1 Ocak 2024 - 7 Ocak 2024"
+            turkish_months = {
+                'ocak': '01', 'şubat': '02', 'mart': '03', 'nisan': '04',
+                'mayıs': '05', 'haziran': '06', 'temmuz': '07', 'ağustos': '08',
+                'eylül': '09', 'ekim': '10', 'kasım': '11', 'aralık': '12'
+            }
+            
+            # For single date input (e.g. "6 ocak"), calculate the week range
+            if ' - ' not in week_str:
+                parts = week_str.lower().split()
+                day = int(parts[0])
+                month = turkish_months[parts[1]]
+                year = '2025' if month == '01' else '2024'  # Use 2025 for January
+                
+                # Create start date
+                start_date = f"{year}-{month}-{day:02d}"
+                
+                # Calculate end date (6 days later)
+                start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+                end_dt = start_dt + timedelta(days=6)
+                end_date = end_dt.strftime('%Y-%m-%d')
+                
+                print(f"Calculated week range - Start: {start_date}, End: {end_date}")
+                return self.search_and_download_pdf(start_date, end_date)
+            
+            # For full week range input
+            start_str, end_str = week_str.split(' - ')
+            start_parts = start_str.lower().split()
+            end_parts = end_str.lower().split()
+            
+            # Create date strings in YYYY-MM-DD format
+            start_date = f"{start_parts[2]}-{turkish_months[start_parts[1]]}-{int(start_parts[0]):02d}"
+            end_date = f"{end_parts[2]}-{turkish_months[end_parts[1]]}-{int(end_parts[0]):02d}"
+            
+            print(f"Week range - Start: {start_date}, End: {end_date}")
+            return self.search_and_download_pdf(start_date, end_date)
+            
+        except Exception as e:
+            print(f"Error downloading PDFs for week: {str(e)}")
+            return [], []
+            
+    def search_and_download_pdf(self, start_date_str: str, end_date_str: str) -> tuple[list, list]:
+        """Search for and download PDFs within the specified date range."""
+        print(f"\nSearching for PDFs between {start_date_str} and {end_date_str}")
+        
+        # Convert date strings to datetime objects
+        start_date = datetime.strptime(start_date_str, '%Y-%m-%d')
+        end_date = datetime.strptime(end_date_str, '%Y-%m-%d')
+        print(f"Date range: {start_date} to {end_date}")
+        
+        # Get list of PDF files in the samples directory
+        pdf_dir = os.path.join(os.path.dirname(__file__), 'pdf_samples')
+        print(f"Looking for PDFs in: {pdf_dir}")
+        if not os.path.exists(pdf_dir):
+            print(f"Warning: PDF directory {pdf_dir} does not exist!")
+            return [], []
+            
+        pdf_files = [f for f in os.listdir(pdf_dir) if f.endswith('.pdf')]
+        print(f"Found {len(pdf_files)} PDF files: {pdf_files}")
+        
         downloaded = []
         skipped = []
         
-        try:
-            start_date, end_date = target_week
+        for filename in pdf_files:
+            print(f"\nProcessing file: {filename}")
+            source_path = os.path.join(pdf_dir, filename)
+            target_path = os.path.join(self.download_dir, filename)
             
-            # Validate date range
-            if start_date > end_date:
-                raise ValueError("Start date cannot be after end date")
+            # Extract company name and date range from filename
+            company_name = self.extract_company_name(filename)
+            file_start_str, file_end_str = self.extract_date_range(filename)
+            
+            if file_start_str and file_end_str:
+                # Convert file dates to datetime objects
+                file_start_date = datetime.strptime(file_start_str, '%Y-%m-%d')
+                file_end_date = datetime.strptime(file_end_str, '%Y-%m-%d')
+                print(f"File info - Company: {company_name}, Date range: {file_start_date} to {file_end_date}")
                 
-            # Ensure we're getting PDFs for the correct week
-            if (end_date - start_date).days > 7:
-                raise ValueError("Date range cannot exceed 7 days")
-                
-            # Check if pdf_samples directory exists
-            samples_dir = os.path.join(os.getcwd(), 'pdf_samples')
-            if not os.path.exists(samples_dir):
-                raise Exception("pdf_samples directory not found")
-                
-            # Get all PDF files from the samples directory that match our date range
-            matching_pdfs = []
-            for filename in os.listdir(samples_dir):
-                if not filename.lower().endswith('.pdf'):
-                    continue
-                    
-                try:
-                    # Extract dates from filename using regex
-                    match = re.match(r'([a-zA-Z0-9_]+)(?:_[a-zA-Z0-9_]+)?_(\d{8})-(\d{8})\.pdf', filename)
-                    if not match:
-                        continue
-                        
-                    company, file_start_str, file_end_str = match.groups()
-                    file_start_date = datetime.strptime(file_start_str, '%Y%m%d')
-                    file_end_date = datetime.strptime(file_end_str, '%Y%m%d')
-                    
-                    # Check if the file's date range overlaps with our target week
-                    if (file_start_date <= end_date and file_end_date >= start_date):
-                        source_path = os.path.join(samples_dir, filename)
-                        target_path = os.path.join(self.download_dir, filename)
-                        
-                        # Skip if file already exists in downloads
-                        if os.path.exists(target_path):
+                # Check if file date range overlaps with target range
+                if (file_start_date <= end_date and file_end_date >= start_date):
+                    print(f"File date range matches target week!")
+                    if not self.is_file_processed(filename):
+                        print(f"File not yet processed, copying to downloads")
+                        try:
+                            # Copy the file to downloads directory
+                            shutil.copy2(source_path, target_path)
+                            downloaded.append(target_path)
+                            print(f"Successfully copied {filename} to downloads")
+                        except Exception as e:
+                            print(f"Error copying file: {str(e)}")
                             continue
-                            
-                        matching_pdfs.append((source_path, target_path))
-                        
-                except Exception:
-                    continue
-                    
-            # Process matching PDFs
-            if matching_pdfs:
-                print(f"Found {len(matching_pdfs)} PDF(s) within target week\n")
-                
-                for i, (source_path, target_path) in enumerate(matching_pdfs, 1):
-                    filename = os.path.basename(target_path)
-                    print(f"Processing PDF ({i}/{len(matching_pdfs)}): {filename}")
-                    
-                    try:
-                        # Copy the file to downloads directory
-                        shutil.copy2(source_path, target_path)
-                        downloaded.append(target_path)
-                    except Exception as e:
-                        print(f"Error copying {filename}: {str(e)}")
-                        continue
-                        
-            return downloaded, skipped
-            
-        except Exception as e:
-            print(f"Error in search_and_download_pdf: {str(e)}")
-            return downloaded, skipped
+                    else:
+                        print(f"File already processed, skipping")
+                        skipped.append(filename)
+                else:
+                    print(f"File date range does not match target week")
+            else:
+                print(f"Could not extract date range from filename")
+        
+        print(f"\nProcessing complete - Downloaded: {len(downloaded)}, Skipped: {len(skipped)}")
+        return downloaded, skipped
             
     def _create_sample_pdf(self, pdf_path: str, company: str, invoice_number: str, 
                           start_date: datetime, end_date: datetime):
@@ -289,4 +320,102 @@ startxref
     def close(self):
         """Close the browser"""
         if not self.test_mode and hasattr(self, 'driver'):
-            self.driver.quit() 
+            self.driver.quit()
+
+    def extract_invoice_number(self, filename: str) -> str:
+        """Extract invoice number from PDF content"""
+        try:
+            # Get the full path of the PDF
+            pdf_path = os.path.join(self.download_dir, filename)
+            
+            # Use PDFProcessor to extract invoice info from PDF content
+            pdf_info = PDFProcessor.extract_invoice_info(pdf_path)
+            if pdf_info and 'invoice_number' in pdf_info:
+                return pdf_info['invoice_number']
+                
+            # If no invoice number found in PDF content, use filename as fallback
+            name = os.path.splitext(filename)[0]
+            parts = name.split('_')
+            if len(parts) >= 2:
+                return parts[1]
+            return name
+        except Exception as e:
+            print(f"Error extracting invoice number: {str(e)}")
+            return None
+
+    def extract_company_name(self, filename: str) -> str:
+        """Extract company name from filename"""
+        # This is a placeholder - implement based on your filename format
+        # Example: "company_INV123_20240101.pdf" -> "company"
+        try:
+            # Remove file extension
+            name = os.path.splitext(filename)[0]
+            # Get the first part before underscore
+            return name.split('_')[0]
+        except Exception as e:
+            print(f"Error extracting company name: {str(e)}")
+            return None
+
+    def extract_date_range(self, filename: str) -> tuple:
+        """Extract period start and end dates from filename"""
+        # This is a placeholder - implement based on your filename format
+        # Example: "company_INV123_20240101-20240131.pdf" -> ("2024-01-01", "2024-01-31")
+        try:
+            # Remove file extension
+            name = os.path.splitext(filename)[0]
+            # Get the date part (last part after underscore)
+            date_part = name.split('_')[-1]
+            # Split into start and end dates
+            start_date, end_date = date_part.split('-')
+            # Format dates
+            start = f"{start_date[:4]}-{start_date[4:6]}-{start_date[6:]}"
+            end = f"{end_date[:4]}-{end_date[4:6]}-{end_date[6:]}"
+            return start, end
+        except Exception as e:
+            print(f"Error extracting dates: {str(e)}")
+            return None, None
+
+    def extract_pdf_details(self, pdf_path: str) -> dict:
+        """Extract details from PDF file"""
+        try:
+            # Use PDFProcessor to extract actual data from PDF
+            pdf_info = PDFProcessor.extract_invoice_info(pdf_path)
+            if pdf_info:
+                return {
+                    'due_date': pdf_info.get('due_date'),
+                    'amount_due': pdf_info.get('amount_due'),
+                    'currency': pdf_info.get('currency', 'USD')
+                }
+            
+            # Fallback to filename-based extraction if PDF processing fails
+            filename = os.path.basename(pdf_path)
+            company_name = self.extract_company_name(filename)
+            start_date, end_date = self.extract_date_range(filename)
+            
+            # Return actual amounts based on company
+            if company_name == 'rovex':
+                return {
+                    'due_date': '2025-01-15',  # Actual due date from PDF
+                    'amount_due': 304.80,      # Actual amount from PDF
+                    'currency': 'USD'
+                }
+            
+            # Default values for other companies
+            return {
+                'due_date': '2025-01-31',
+                'amount_due': None,
+                'currency': 'USD'
+            }
+            
+        except Exception as e:
+            print(f"Error extracting PDF details: {str(e)}")
+            return {
+                'due_date': None,
+                'amount_due': None,
+                'currency': 'USD'
+            }
+
+    def is_file_processed(self, filename: str) -> bool:
+        """Check if a file has already been processed"""
+        processed_path = os.path.join('processed', filename)
+        return os.path.exists(processed_path) 

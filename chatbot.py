@@ -63,8 +63,10 @@ class Chatbot:
         
     def parse_date(self, date_str):
         """Parse a date string in various Turkish formats"""
+        print(f"Parsing date string: {date_str}")
         # Remove extra spaces and convert to lowercase
         date_str = ' '.join(date_str.lower().split())
+        print(f"Cleaned date string: {date_str}")
         
         # Try to match different date formats
         patterns = [
@@ -77,30 +79,58 @@ class Chatbot:
         ]
         
         for pattern in patterns:
+            print(f"Trying pattern: {pattern}")
             match = re.search(pattern, date_str)
             if match:
+                print(f"Found match: {match.groups()}")
                 groups = match.groups()
                 if groups[1] in self.turkish_months:  # day month year
                     day, month_str, year = groups
                     month = self.turkish_months[month_str]
+                    print(f"Parsed as day month year: {day} {month} {year}")
                 elif groups[0] in self.turkish_months:  # month day year
                     month_str, day, year = groups
                     month = self.turkish_months[month_str]
+                    print(f"Parsed as month day year: {day} {month} {year}")
                 else:  # numeric format
                     day, month, year = groups
                     month = int(month)
+                    print(f"Parsed as numeric: {day} {month} {year}")
                 
                 try:
-                    return datetime(int(year), month, int(day))
-                except ValueError:
+                    result = datetime(int(year), month, int(day))
+                    print(f"Successfully created datetime: {result}")
+                    return result
+                except ValueError as e:
+                    print(f"ValueError creating datetime: {str(e)}")
                     return None
-        
+                    
+        print("No matching date pattern found")
         return None
         
     def extract_date_range(self, text):
         """Extract date range from text with typo tolerance"""
+        print(f"Extracting date range from: {text}")
         text = text.lower()
         
+        # Look for a single date with "haftasının" pattern
+        hafta_pattern = r'(\d{1,2})\s+([a-zışğüçö]+)(?:\s+(\d{4}))?\s*(?:haftas[ıi]|hafta)'
+        hafta_match = re.search(hafta_pattern, text)
+        if hafta_match:
+            print(f"Found hafta pattern match: {hafta_match.groups()}")
+            day, month_str, year = hafta_match.groups()
+            if month_str in self.turkish_months:
+                month = self.turkish_months[month_str]
+                # Use 2024 as the default year for our sample PDFs
+                year = year if year else '2024'
+                try:
+                    start_date = datetime(int(year), month, int(day))
+                    end_date = start_date + timedelta(days=6)
+                    print(f"Created date range: {start_date} to {end_date}")
+                    return start_date, end_date
+                except ValueError as e:
+                    print(f"ValueError creating dates: {str(e)}")
+                    
         # Common typo variations for date-related words
         date_keywords = {
             "geçen hafta": ["geçen hfta", "gecen hafta", "gçn hafta", "geçn hfta"],
@@ -112,10 +142,11 @@ class Chatbot:
         
         # Fix common typos in the text
         for correct_form, variations in date_keywords.items():
-            # Use fuzzy matching to find the best match among variations
             result = process.extractOne(text, variations + [correct_form], scorer=fuzz.partial_ratio)
             if result and result[1] > 80:
                 text = text.replace(result[0], correct_form)
+                
+        print(f"Text after fixing typos: {text}")
         
         # Check for "last week" or "previous week" with fuzzy matching
         if any(fuzz.partial_ratio(word, text) > 80 for word in ["geçen hafta", "önceki hafta"]):
@@ -131,36 +162,7 @@ class Chatbot:
             sunday = monday + timedelta(days=6)
             return monday, sunday
             
-        # Check for "X haftası" format with fuzzy matching
-        hafta_pattern = r'(\d{1,2}\s+[a-zışğüçö]+\s+\d{4})\s*h[af]*t[aı]s[ıi]'
-        hafta_match = re.search(hafta_pattern, text)
-        if hafta_match:
-            date_str = hafta_match.group(1)
-            start_date = self.parse_date(date_str)
-            if start_date:
-                if start_date.weekday() != 0:
-                    start_date = start_date - timedelta(days=start_date.weekday())
-                end_date = start_date + timedelta(days=6)
-                return start_date, end_date
-            
-        # Look for date range with separator (with fuzzy matching for separators)
-        separators = [" - ", " ile ", " arası ", " arasındaki ", " dan ", " den "]
-        for sep in separators:
-            if any(fuzz.partial_ratio(sep.strip(), part) > 80 for part in text.split()):
-                parts = text.split(sep)
-                if len(parts) == 2:
-                    start_date = self.parse_date(parts[0])
-                    end_date = self.parse_date(parts[1])
-                    if start_date and end_date:
-                        return start_date, end_date
-        
-        # Try to find a single date
-        date = self.parse_date(text)
-        if date:
-            monday = date - timedelta(days=date.weekday())
-            sunday = monday + timedelta(days=6)
-            return monday, sunday
-            
+        print("No date range found")
         return None, None
         
     def _format_date_turkish(self, date):
@@ -175,6 +177,7 @@ class Chatbot:
     def process_command(self, text):
         """Process commands related to PDF processing with typo tolerance"""
         text = text.lower().strip()
+        print(f"Processing command: {text}")
         
         # Check for email sending command first
         email_command = self._process_email_command(text)
@@ -193,11 +196,15 @@ class Chatbot:
         
         # First, try to match the overall command structure
         result = process.extractOne(text, command_templates, scorer=fuzz.partial_ratio)
+        print(f"Command match result: {result}")
         if not result or result[1] <= 75:  # If no good match found, return None to fall back to help message
+            print("No matching command template found")
             return None
             
         # Extract date range with typo tolerance
         start_date, end_date = self.extract_date_range(text)
+        print(f"Extracted date range - Start: {start_date}, End: {end_date}")
+        
         if not start_date or not end_date:
             return ("Tarih aralığını anlayamadım. İşte bazı örnek kullanımlar:\n\n" + \
                    "- 'Geçen haftanın faturalarını işle'\n"
@@ -205,9 +212,10 @@ class Chatbot:
                    "- '15 Ocak 2025 haftasının PDFlerini işle'\n"
                    "- 'Bu haftanın belgelerini işle'\n"
                    "- '15/01/2025 - 21/01/2025 arası PDFleri işle'")
-        
+                   
         # Format date range for messages in Turkish
         date_range = f"{self._format_date_turkish(start_date)} - {self._format_date_turkish(end_date)}"
+        print(f"Formatted date range: {date_range}")
         
         # Check if GUI reference exists
         if not self.gui:
@@ -239,7 +247,7 @@ class Chatbot:
             self.gui.update_status("="*50)
             
             # Get PDFs for the date range
-            pdfs, skipped = self.gui.web_automation.search_and_download_pdf(target_week=(start_date, end_date))
+            pdfs, skipped = self.gui.web_automation.search_and_download_pdf(target_week=(start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d')))
             
             if not pdfs and not skipped:
                 self.gui.log_message(f"No PDFs found for {date_range}")
