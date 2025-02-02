@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, scrolledtext
 from tkcalendar import DateEntry  # For date picker
 from datetime import datetime, timedelta
 import os
@@ -43,6 +43,9 @@ class ReceiptAutomationGUI:
         
         # Load config
         self.load_config()
+        
+        # Initialize chatbot
+        self.chatbot = Chatbot(self)
         
         # Create EmailHandler first
         self.email_handler = EmailHandler(
@@ -753,15 +756,101 @@ class ReceiptAutomationGUI:
             email_keywords = ['mail', 'email', 'e-mail', 'eposta', 'e-posta', 'elektronik posta']
             due_date_keywords = ['son ödeme', 'son odeme', 'vade', 'ödeme günü', 'odeme gunu']
             week_keywords = ['hafta', 'haftası', 'haftasının', 'haftasindaki', 'haftasında', 'haftasi', 'haftasini']
-            pdf_keywords = ['pdf', 'pdfleri', 'pdflerini', 'dosya', 'dosyaları', 'dosyalarini']
+            pdf_keywords = ['pdf', 'pdfleri', 'pdflerini', 'dosya', 'dosyaları', 'dosyalarini', 'işle', 'isle']
             
-            # Extract company name (common pattern in all queries)
+            # Check if this is a PDF processing command
+            if any(keyword in query for keyword in pdf_keywords) and any(keyword in query for keyword in week_keywords):
+                # Extract date from query
+                date_str = None
+                for word in week_keywords:
+                    if word in query:
+                        parts = query.split(word)[0].strip().split()
+                        if parts:
+                            date_str = ' '.join(parts[-2:] if len(parts) >= 2 else parts)
+                        break
+                
+                if date_str:
+                    print(f"Processing PDFs for date: {date_str}")
+                    # Download PDFs for the week
+                    downloaded_pdfs, skipped_pdfs = self.web_automation.download_pdfs_for_week(date_str)
+                    
+                    if not downloaded_pdfs and not skipped_pdfs:
+                        return "Belirtilen hafta için PDF bulunamadı."
+                    
+                    # Process the downloaded PDFs
+                    successful_count = 0
+                    failed_count = 0
+                    auto_sent_count = 0
+                    
+                    for pdf_path in downloaded_pdfs:
+                        try:
+                            filename = os.path.basename(pdf_path)
+                            invoice_number = self.web_automation.extract_invoice_number(filename)
+                            company_name = self.web_automation.extract_company_name(filename)
+                            start_date, end_date = self.web_automation.extract_date_range(filename)
+                            
+                            if not all([invoice_number, company_name, start_date, end_date]):
+                                raise Exception("Failed to extract required information")
+                            
+                            # Extract additional details
+                            pdf_details = self.web_automation.extract_pdf_details(pdf_path)
+                            
+                            # Store invoice details
+                            self.email_handler.store_invoice_details(
+                                invoice_number=invoice_number,
+                                company_name=company_name,
+                                period_start=start_date,
+                                period_end=end_date,
+                                due_date=pdf_details.get('due_date'),
+                                amount_due=pdf_details.get('amount_due'),
+                                currency=pdf_details.get('currency', 'USD'),
+                                pdf_path=pdf_path
+                            )
+                            
+                            # Check if we have an email for this invoice
+                            email, stored_company = self.email_handler.get_email_for_invoice(invoice_number)
+                            if email:
+                                if self.email_handler.send_email_directly(invoice_number, pdf_path, company_name, email):
+                                    auto_sent_count += 1
+                                    successful_count += 1
+                            else:
+                                if self.email_handler.add_to_pending(
+                                    invoice_number=invoice_number,
+                                    company_name=company_name,
+                                    pdf_path=pdf_path,
+                                    period_start=start_date,
+                                    period_end=end_date
+                                ):
+                                    successful_count += 1
+                                
+                        except Exception as e:
+                            print(f"Error processing {pdf_path}: {str(e)}")
+                            failed_count += 1
+                    
+                    # Update pending requests display
+                    self.update_pending_requests_tab()
+                    
+                    # Return summary message
+                    return (
+                        f"İşlem tamamlandı:\n"
+                        f"- {successful_count} PDF başarıyla işlendi\n"
+                        f"  • {auto_sent_count} otomatik gönderildi\n"
+                        f"  • {successful_count - auto_sent_count} bekleyen isteklere eklendi\n"
+                        f"- {len(skipped_pdfs)} PDF atlandı (zaten işlenmiş)\n"
+                        f"- {failed_count} PDF başarısız oldu"
+                    )
+                
+                return "Tarih bilgisini anlayamadım. Lütfen '6 Ocak haftası' gibi bir format kullanın."
+            
+            # Extract company name (for other queries)
             if 'şirketinin' in query:
                 company_name = query.split('şirketinin')[0].strip()
             elif 'sirketinin' in query:
                 company_name = query.split('sirketinin')[0].strip()
             else:
-                return "Üzgünüm, şirket adını anlayamadım. Lütfen '[şirket] şirketinin ...' formatında sorun."
+                # Only require company name for non-PDF processing queries
+                if any(keyword in query for keyword in (amount_keywords + email_keywords + due_date_keywords)):
+                    return "Üzgünüm, şirket adını anlayamadım. Lütfen '[şirket] şirketinin ...' formatında sorun."
             
             # Check for due date query
             if any(keyword in query for keyword in due_date_keywords):

@@ -4,10 +4,17 @@ from datetime import datetime, timedelta
 import re
 from email_handler import EmailHandler
 from rapidfuzz import fuzz, process
+from deepseek_handler import DeepSeekHandler
 
 class Chatbot:
     def __init__(self, gui=None):
         self.gui = gui
+        self.deepseek = DeepSeekHandler()
+        
+        # Load DeepSeek models
+        print("Loading DeepSeek models...")
+        if not self.deepseek.load_models():
+            print("Warning: Could not load DeepSeek models. Using fallback responses.")
         
         # Turkish month names and their variations
         self.turkish_months = {
@@ -113,16 +120,20 @@ class Chatbot:
         print(f"Extracting date range from: {text}")
         text = text.lower()
         
-        # Look for a single date with "haftasının" pattern
-        hafta_pattern = r'(\d{1,2})\s+([a-zışğüçö]+)(?:\s+(\d{4}))?\s*(?:haftas[ıi]|hafta)'
+        # Look for a single date with "haftasının" or similar pattern
+        hafta_pattern = r'(\d{1,2})\s*([a-zışğüçö]+)(?:\s*(\d{4}))?\s*(?:haftas[ıi]|hafta)'
         hafta_match = re.search(hafta_pattern, text)
         if hafta_match:
             print(f"Found hafta pattern match: {hafta_match.groups()}")
             day, month_str, year = hafta_match.groups()
+            
+            # Clean up the month string
+            month_str = ''.join(c for c in month_str if c.isalpha())
+            
             if month_str in self.turkish_months:
                 month = self.turkish_months[month_str]
-                # Use 2024 as the default year for our sample PDFs
-                year = year if year else '2024'
+                # Use current year if not specified
+                year = year if year else str(datetime.now().year)
                 try:
                     start_date = datetime(int(year), month, int(day))
                     end_date = start_date + timedelta(days=6)
@@ -284,10 +295,10 @@ class Chatbot:
             self.gui.update_processing_state()
             return f"PDF işleme sırasında bir hata oluştu: {str(e)}"
         
-    def get_response(self, text):
-        """Main entry point for getting responses"""
+    def get_response(self, text: str) -> str:
+        """Get response using DeepSeek models"""
         if not text:
-            return self.responses['greeting']
+            return self.generate_response("Merhaba! Size nasıl yardımcı olabilirim?")
             
         text = text.lower().strip()
         
@@ -295,11 +306,11 @@ class Chatbot:
         if self._is_greeting(text):
             return self._handle_greeting(text)
         elif self._is_thanks(text):
-            return self.responses['thanks']
+            return self.generate_response("Rica ederim! Başka bir konuda yardımcı olabilir miyim?")
         elif self._is_goodbye(text):
-            return self.responses['goodbye']
+            return self.generate_response("Görüşmek üzere! Başka bir işleminiz olursa yardımcı olmaktan memnuniyet duyarım.")
         elif self._is_help(text):
-            return self.responses['help']
+            return self.generate_help_response()
         elif self._is_status_request(text):
             return self._get_status_info()
             
@@ -308,8 +319,40 @@ class Chatbot:
         if command_response is not None:
             return command_response
             
-        # If nothing matches, return help message
-        return self.responses['help']
+        # If nothing matches, use DeepSeek to generate a response
+        return self.generate_response(text)
+        
+    def generate_response(self, text: str, model_type: str = "chat") -> str:
+        """Generate response using DeepSeek models"""
+        if not self.deepseek.is_loaded():
+            # Fallback responses if models aren't loaded
+            if "nasıl" in text or "yardım" in text:
+                return self.generate_help_response()
+            return "Üzgünüm, şu anda size yardımcı olamıyorum. Lütfen daha sonra tekrar deneyin."
+            
+        # Prepare prompt with context
+        prompt = f"Sen Türkçe konuşan bir PDF işleme asistanısın. Kullanıcı mesajı: {text}\n\nYanıt:"
+        
+        # Use appropriate model based on query type
+        if any(word in text.lower() for word in ["nasıl", "yardım", "örnek", "selam", "merhaba"]):
+            model_type = "chat"  # Use chat model for conversational queries
+        else:
+            model_type = "base"  # Use base model for factual/technical queries
+            
+        return self.deepseek.generate_response(prompt, model_type)
+        
+    def generate_help_response(self) -> str:
+        """Generate help response"""
+        help_text = ("Size PDF işleme konusunda yardımcı olabilirim. Örnek komutlar:\n\n"
+                    "- 'Geçen haftanın faturalarını işle'\n"
+                    "- '15 Ocak 2025 haftasının PDFlerini işle'\n"
+                    "- 'Bu haftanın belgelerini işle'\n"
+                    "- '15/01/2025 - 21/01/2025 arası PDFleri işle'\n"
+                    "- '123 numaralı PDFi example@mail.com adresine gönder'")
+                    
+        if self.deepseek.is_loaded():
+            return self.deepseek.generate_response(help_text, "chat")
+        return help_text
         
     def _is_greeting(self, text):
         """Check if the message is a greeting using fuzzy matching"""
