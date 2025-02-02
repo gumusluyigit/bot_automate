@@ -8,23 +8,90 @@ import os
 import json
 
 class EmailHandler:
-    def __init__(self, sender_email: str, internal_email: str, db_path=None):
+    def __init__(self, sender_email=None, internal_email=None):
         self.sender_email = sender_email
         self.internal_email = internal_email
-        self.db_path = db_path or os.path.join(os.path.dirname(os.path.abspath(__file__)), 'db', 'pending_requests.db')
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        self._password = None
         
-        # Initialize database
-        self.init_db()
-        
-        # Gmail SMTP settings
-        self.smtp_server = "smtp.gmail.com"
-        self.smtp_port = 587
-        self.app_password = None  # Will be set through save_credentials
-        
-        # Try to load credentials on initialization
-        self._load_credentials()
-        
+    def save_credentials(self, app_password):
+        """Save the app password"""
+        try:
+            self._password = app_password
+            return True
+        except Exception as e:
+            print(f"Error saving credentials: {e}")
+            return False
+            
+    def authenticate(self):
+        """Test authentication with saved credentials"""
+        if not self.sender_email or not self._password:
+            return False
+            
+        try:
+            # Try to connect to Gmail's SMTP server
+            with smtplib.SMTP("smtp.gmail.com", 587) as server:
+                server.starttls()
+                server.login(self.sender_email, self._password)
+            return True
+        except Exception as e:
+            print(f"Authentication failed: {e}")
+            return False
+    
+    def send_email(self, to_email, subject, body, attachments=None):
+        """Send an email with optional attachments"""
+        if not self.sender_email or not self._password:
+            print("Email settings not configured")
+            return False
+            
+        try:
+            # Create message
+            msg = MIMEMultipart()
+            msg['From'] = self.sender_email
+            msg['To'] = to_email
+            msg['Subject'] = subject
+            
+            # Add body
+            msg.attach(MIMEText(body, 'plain'))
+            
+            # Add attachments
+            if attachments:
+                if isinstance(attachments, str):
+                    attachments = [attachments]
+                    
+                for attachment in attachments:
+                    if os.path.exists(attachment):
+                        with open(attachment, 'rb') as f:
+                            part = MIMEApplication(f.read(), Name=os.path.basename(attachment))
+                            part['Content-Disposition'] = f'attachment; filename="{os.path.basename(attachment)}"'
+                            msg.attach(part)
+            
+            # Send email
+            with smtplib.SMTP("smtp.gmail.com", 587) as server:
+                server.starttls()
+                server.login(self.sender_email, self._password)
+                server.send_message(msg)
+                
+            return True
+            
+        except Exception as e:
+            print(f"Error sending email: {e}")
+            return False
+            
+    def send_email_directly(self, invoice_number, pdf_path, company_name, email, subject=None, body=None):
+        """Send an email for a specific invoice"""
+        if not subject:
+            subject = f'Invoice {invoice_number} for {company_name}'
+            
+        if not body:
+            body = f'Please find attached the invoice {invoice_number} for {company_name}.'
+            
+        return self.send_email(
+            to_email=email,
+            subject=subject,
+            body=body,
+            attachments=[pdf_path] if pdf_path else None
+        )
+
     def init_db(self):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
@@ -82,67 +149,6 @@ class EmailHandler:
         conn.commit()
         conn.close()
         
-    def save_credentials(self, app_password: str):
-        """Save Gmail App Password and email settings"""
-        try:
-            credentials = {
-                'sender_email': self.sender_email,
-                'internal_email': self.internal_email,
-                'app_password': app_password
-            }
-            with open('email_config.json', 'w') as f:
-                json.dump(credentials, f)
-            self.app_password = app_password
-            return True
-        except Exception as e:
-            print(f"Error saving credentials: {str(e)}")
-            return False
-            
-    def _load_credentials(self):
-        """Load Gmail credentials from config file"""
-        try:
-            if os.path.exists('email_config.json'):
-                with open('email_config.json', 'r') as f:
-                    credentials = json.load(f)
-                    self.app_password = credentials.get('app_password')
-                    self.sender_email = credentials.get('sender_email', self.sender_email)
-                    self.internal_email = credentials.get('internal_email', self.internal_email)
-                    return bool(self.app_password and self.sender_email and self.internal_email)
-            return False
-        except Exception as e:
-            print(f"Error loading credentials: {str(e)}")
-            return False
-            
-    def authenticate(self) -> bool:
-        """Test Gmail authentication"""
-        try:
-            if not self.app_password:
-                if not self._load_credentials():
-                    raise Exception(
-                        "No credentials configured. Please configure your email settings first."
-                    )
-                    
-            if not self.sender_email or '@gmail.com' not in self.sender_email.lower():
-                raise Exception(
-                    "Invalid Gmail address. Please make sure to use a complete Gmail address (example@gmail.com)"
-                )
-                    
-            server = smtplib.SMTP(self.smtp_server, self.smtp_port)
-            server.starttls()
-            
-            try:
-                server.login(self.sender_email, self.app_password)
-                server.quit()
-                return True
-            except smtplib.SMTPAuthenticationError:
-                raise Exception(
-                    "Authentication failed. Please check your Gmail App Password in Settings."
-                )
-                
-        except Exception as e:
-            print(f"Authentication error: {str(e)}")
-            return False
-    
     def get_email_for_invoice(self, invoice_number: str) -> tuple:
         """Get email address and company name for invoice number from database"""
         conn = sqlite3.connect(self.db_path)
@@ -171,8 +177,8 @@ class EmailHandler:
     def request_company_email(self, invoice_number: str, subject: str, pdf_path: str) -> bool:
         """Send email to internal department requesting company email"""
         try:
-            if not self.app_password:
-                if not self._load_credentials():
+            if not self._password:
+                if not self.authenticate():
                     raise Exception("No credentials configured")
                     
             msg = MIMEMultipart()
@@ -195,9 +201,9 @@ class EmailHandler:
                     msg.attach(pdf_attachment)
             
             # Send email
-            server = smtplib.SMTP(self.smtp_server, self.smtp_port)
+            server = smtplib.SMTP("smtp.gmail.com", 587)
             server.starttls()
-            server.login(self.sender_email, self.app_password)
+            server.login(self.sender_email, self._password)
             server.send_message(msg)
             server.quit()
             
@@ -251,8 +257,8 @@ class EmailHandler:
                 print(f"Receipt for invoice {invoice_number} was already sent to {company_email}")
                 return False
                 
-            if not self.app_password:
-                if not self._load_credentials():
+            if not self._password:
+                if not self.authenticate():
                     raise Exception("No credentials configured")
                     
             msg = MIMEMultipart()
@@ -275,9 +281,9 @@ class EmailHandler:
                     msg.attach(pdf_attachment)
             
             # Send email
-            server = smtplib.SMTP(self.smtp_server, self.smtp_port)
+            server = smtplib.SMTP("smtp.gmail.com", 587)
             server.starttls()
-            server.login(self.sender_email, self.app_password)
+            server.login(self.sender_email, self._password)
             server.send_message(msg)
             server.quit()
             
@@ -355,40 +361,6 @@ class EmailHandler:
             print(f"Error adding to pending requests: {str(e)}")
             return False
             
-    def mark_as_sent(self, invoice_number: str, email: str, status: str = 'sent') -> bool:
-        """Mark a request as sent"""
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            # Get request details before deleting
-            cursor.execute('SELECT company_name, pdf_path FROM pending_requests WHERE invoice_number = ?', 
-                         (invoice_number,))
-            result = cursor.fetchone()
-            
-            if not result:
-                return False
-                
-            company_name, pdf_path = result
-            
-            # Add to sent_emails
-            cursor.execute('''
-                INSERT OR REPLACE INTO sent_emails 
-                (invoice_number, email, company_name, status, pdf_path)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (invoice_number, email, company_name, status, pdf_path))
-            
-            # Remove from pending_requests
-            cursor.execute('DELETE FROM pending_requests WHERE invoice_number = ?', 
-                         (invoice_number,))
-            
-            conn.commit()
-            conn.close()
-            return True
-        except Exception as e:
-            print(f"Error marking as sent: {str(e)}")
-            return False
-            
     def is_invoice_pending(self, invoice_number: str) -> bool:
         """Check if an invoice is in pending requests"""
         try:
@@ -406,118 +378,9 @@ class EmailHandler:
             print(f"Error checking pending status: {str(e)}")
             return False
             
-    def check_if_sent(self, invoice_number: str) -> bool:
-        """Check if an invoice has been sent"""
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            cursor.execute('SELECT 1 FROM sent_emails WHERE invoice_number = ?', 
-                         (invoice_number,))
-            
-            result = cursor.fetchone() is not None
-            conn.close()
-            
-            return result
-        except Exception as e:
-            print(f"Error checking sent status: {str(e)}")
-            return False
-
-    def send_email(self, to_email, subject, body, attachments=None):
-        """Send an email with optional attachments"""
-        try:
-            msg = MIMEMultipart()
-            msg['From'] = self.sender_email
-            msg['To'] = to_email
-            msg['Subject'] = subject
-            
-            msg.attach(MIMEText(body, 'plain'))
-            
-            # Add attachments
-            if attachments:
-                for file_path in attachments:
-                    if os.path.exists(file_path):
-                        with open(file_path, 'rb') as f:
-                            part = MIMEApplication(f.read(), Name=os.path.basename(file_path))
-                            part['Content-Disposition'] = f'attachment; filename="{os.path.basename(file_path)}"'
-                            msg.attach(part)
-            
-            # Send email (implementation depends on your email server setup)
-            # This is a placeholder - you'll need to add your actual email sending code
-            print(f"Would send email to {to_email} with subject: {subject}")
-            print(f"Attachments: {attachments}")
-            
-            # Mark as sent in database
-            for attachment in attachments or []:
-                invoice_number = self._extract_invoice_number(attachment)
-                if invoice_number:
-                    self.db.mark_as_sent(invoice_number, to_email)
-            
-            return True
-            
-        except Exception as e:
-            print(f"Error sending email: {str(e)}")
-            # Log error in database
-            for attachment in attachments or []:
-                invoice_number = self._extract_invoice_number(attachment)
-                if invoice_number:
-                    self.db.mark_as_sent(invoice_number, to_email, status="error", error_message=str(e))
-            return False
-            
-    def _extract_invoice_number(self, pdf_path):
-        """Extract invoice number from PDF filename or path"""
-        # This is a placeholder - implement based on your PDF naming convention
-        return None
-        
     def get_email_history(self, invoice_number=None):
         """Get email sending history"""
         return self.db.get_email_history(invoice_number)
-
-    def send_email_directly(self, invoice_number: str, pdf_path: str, company_name: str, email: str, subject: str = None, body: str = None) -> bool:
-        """Send email directly for known invoice numbers"""
-        try:
-            if not self.app_password:
-                if not self._load_credentials():
-                    return False
-                    
-            # Create email message
-            msg = MIMEMultipart()
-            msg['From'] = self.sender_email
-            msg['To'] = email
-            msg['Subject'] = subject or f"Invoice from {company_name}"
-            
-            # Add body text
-            msg.attach(MIMEText(body or f"Please find attached the invoice from {company_name}.", 'plain'))
-            
-            # Attach PDF if provided
-            if pdf_path and os.path.exists(pdf_path):
-                with open(pdf_path, 'rb') as f:
-                    pdf = MIMEApplication(f.read(), _subtype='pdf')
-                    pdf.add_header('Content-Disposition', 'attachment', filename=os.path.basename(pdf_path))
-                    msg.attach(pdf)
-            
-            # Send email
-            server = smtplib.SMTP(self.smtp_server, self.smtp_port)
-            server.starttls()
-            server.login(self.sender_email, self.app_password)
-            server.send_message(msg)
-            server.quit()
-            
-            # Record in sent_emails only if it's not a notification email
-            if pdf_path:
-                conn = sqlite3.connect(self.db_path)
-                cursor = conn.cursor()
-                cursor.execute('''
-                    INSERT INTO sent_emails (invoice_number, email, company_name, status, pdf_path)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (invoice_number, email, company_name, 'sent', pdf_path))
-                conn.commit()
-                conn.close()
-            
-            return True
-        except Exception as e:
-            print(f"Error sending email: {str(e)}")
-            return False
 
     def get_company_due_date(self, company_name: str) -> str:
         """Get the latest due date for a company"""

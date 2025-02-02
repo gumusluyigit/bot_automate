@@ -49,6 +49,44 @@
         </div>
     </div>
 
+    <!-- Company Emails Section -->
+    <div class="card mb-4">
+        <div class="card-header">
+            <h5 class="mb-0">Company Email Management</h5>
+        </div>
+        <div class="card-body">
+            {% if companies %}
+                <div class="table-responsive">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>Company</th>
+                                <th>Current Email</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for company in companies %}
+                                <tr>
+                                    <td>{{ company.company_name }}</td>
+                                    <td>{{ company.email }}</td>
+                                    <td>
+                                        <a href="{{ url_for('company_email_history', company_name=company.company_name) }}" 
+                                           class="btn btn-sm btn-info">
+                                            <i class="bi bi-clock-history"></i> View History
+                                        </a>
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% else %}
+                <p class="text-muted">No company emails configured yet.</p>
+            {% endif %}
+        </div>
+    </div>
+
     <!-- Reset Environment Section -->
     <div class="card border-danger">
         <div class="card-header bg-danger text-white">

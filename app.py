@@ -2,18 +2,197 @@ from flask import Flask, render_template, request, jsonify, send_file, redirect,
 from pdf_processor import PDFProcessor
 from database_handler import DatabaseHandler
 from email_handler import EmailHandler
+from config_handler import ConfigHandler
 import os
 from dotenv import load_dotenv
 import json
 from werkzeug.utils import secure_filename
 from datetime import datetime
 import shutil
+import requests
 
 # Load environment variables
 load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'your-secret-key-here')  # Required for flash messages
+
+# DeepSeek API Configuration
+DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
+DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"  # Replace with actual API endpoint
+
+# Initialize handlers
+config_handler = ConfigHandler()
+db_handler = DatabaseHandler(db_path="invoice_emails.db")
+
+# Load email configuration
+email_config = config_handler.get_config()
+email_handler = EmailHandler(
+    sender_email=email_config['sender_email'],
+    internal_email=email_config['internal_email']
+)
+
+# If we have saved credentials, set them in the email handler
+if email_config['app_password']:
+    email_handler.save_credentials(email_config['app_password'])
+
+def generate_response(user_input):
+    if not DEEPSEEK_API_KEY:
+        # If API is not available, use rule-based responses
+        try:
+            # Check for database query patterns
+            lower_input = user_input.lower()
+            
+            # Process week-related file processing requests
+            if any(keyword in lower_input for keyword in ['hafta', 'pdfleri', 'işle', 'gönder']):
+                # Extract date information from the message
+                # This is a simple implementation - you might want to use a more sophisticated date parser
+                from datetime import datetime, timedelta
+                import re
+                
+                # Try to find date patterns in the message
+                today = datetime.now()
+                if 'bu hafta' in lower_input:
+                    week_start = today - timedelta(days=today.weekday())
+                    week_end = week_start + timedelta(days=6)
+                elif 'geçen hafta' in lower_input:
+                    week_start = today - timedelta(days=today.weekday() + 7)
+                    week_end = week_start + timedelta(days=6)
+                else:
+                    # Try to parse specific dates
+                    dates = re.findall(r'\d{2}[./]\d{2}[./]\d{4}', user_input)
+                    if len(dates) >= 2:
+                        week_start = datetime.strptime(dates[0], '%d/%m/%Y')
+                        week_end = datetime.strptime(dates[1], '%d/%m/%Y')
+                    else:
+                        return "Lütfen işlemek istediğiniz haftayı belirtin. Örnek: 'Bu hafta' veya '01/03/2024-07/03/2024'"
+                
+                # Format dates for processing
+                week_range = f"{week_start.strftime('%Y-%m-%d')},{week_end.strftime('%Y-%m-%d')}"
+                
+                # Process the files
+                from flask import current_app
+                with current_app.test_client() as client:
+                    response = client.post('/manual-process', data={'selected_week': week_range})
+                    result = response.get_json()
+                    
+                    if result['success']:
+                        message_parts = []
+                        if result.get('processed_files'):
+                            message_parts.append(f"{len(result['processed_files'])} PDF işlendi")
+                        if result.get('auto_emailed_files'):
+                            message_parts.append(f"{len(result['auto_emailed_files'])} PDF otomatik gönderildi")
+                        if result.get('skipped_files'):
+                            message_parts.append(f"{len(result['skipped_files'])} PDF atlandı")
+                        
+                        return ". ".join(message_parts) + "."
+                    else:
+                        return f"İşlem sırasında bir hata oluştu: {result.get('error', 'Bilinmeyen hata')}"
+            
+            # Handle email sending requests
+            elif 'mail' in lower_input and any(char.isdigit() for char in user_input):
+                # Extract invoice number and email address
+                import re
+                invoice_match = re.search(r'\d+', user_input)
+                email_match = re.search(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', user_input)
+                
+                if invoice_match and email_match:
+                    invoice_number = invoice_match.group()
+                    email_address = email_match.group()
+                    
+                    # Get company name for this invoice
+                    company_name = db_handler.get_company_name_by_invoice(invoice_number)
+                    if not company_name:
+                        return "Bu fatura numarası için şirket bilgisi bulunamadı."
+                    
+                    # Send the email using the existing endpoint
+                    from flask import current_app
+                    with current_app.test_client() as client:
+                        response = client.post('/send-email', data={
+                            'invoice_number': invoice_number,
+                            'email_address': email_address
+                        })
+                        
+                        # Check if email was sent successfully
+                        if 'success' in response.get_data(as_text=True):
+                            # Store the email association
+                            db_handler.add_company_email(company_name, email_address)
+                            return f"Email {email_address} adresine başarıyla gönderildi. Bu email adresi {company_name} şirketi için kaydedildi."
+                        else:
+                            return "Email gönderimi sırasında bir hata oluştu. Lütfen tekrar deneyin."
+                else:
+                    return "Fatura numarası veya email adresi bulunamadı. Lütfen tekrar deneyin."
+            
+            # Handle database queries
+            elif any(keyword in lower_input for keyword in ['borç', 'ödeme', 'tarih']):
+                # Extract company name or invoice number
+                company_name = None
+                invoice_number = None
+                
+                # Try to find invoice number
+                import re
+                invoice_match = re.search(r'\d+', user_input)
+                if invoice_match:
+                    invoice_number = invoice_match.group()
+                
+                # If no invoice number, try to find company name
+                if not invoice_number:
+                    # This is a simple implementation - you might want to use more sophisticated NLP
+                    words = user_input.split()
+                    for i, word in enumerate(words):
+                        if word.lower() in ['şirket', 'firma', 'kurum']:
+                            if i > 0:
+                                company_name = words[i-1]
+                                break
+                
+                if company_name or invoice_number:
+                    # Query the database
+                    if invoice_number:
+                        request_info = db_handler.get_request_by_invoice(invoice_number)
+                        if request_info:
+                            return f"Fatura #{invoice_number}:\nŞirket: {request_info['company_name']}\nBaşlangıç: {request_info['period_start']}\nBitiş: {request_info['period_end']}"
+                    else:
+                        # Get company information
+                        company_info = db_handler.get_company_info(company_name)
+                        if company_info:
+                            return f"{company_name} için bilgiler:\nSon işlem tarihi: {company_info['last_transaction_date']}\nToplam işlem: {company_info['total_transactions']}"
+                    
+                    return "Belirtilen şirket veya fatura numarası için bilgi bulunamadı."
+                else:
+                    return "Lütfen bir şirket adı veya fatura numarası belirtin."
+            
+            return "Üzgünüm, ne yapmak istediğinizi anlayamadım. Lütfen daha açık bir şekilde belirtin."
+            
+        except Exception as e:
+            print(f"Error processing request: {str(e)}")
+            return "İşlem sırasında bir hata oluştu. Lütfen tekrar deneyin."
+    else:
+        # Use DeepSeek API when available
+        try:
+            headers = {
+                "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            
+            payload = {
+                "messages": [{"role": "user", "content": user_input}],
+                "model": "deepseek-chat",
+                "temperature": 0.7,
+                "max_tokens": 256
+            }
+            
+            response = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload)
+            response.raise_for_status()
+            
+            result = response.json()
+            return result['choices'][0]['message']['content'].strip()
+            
+        except requests.exceptions.RequestException as e:
+            print(f"API request error: {str(e)}")
+            return "I apologize, but I encountered an error while processing your request. Please try again."
+        except Exception as e:
+            print(f"Error generating response: {str(e)}")
+            return "I apologize, but I encountered an error while processing your request. Please try again."
 
 # Configuration
 PDF_SAMPLES_FOLDER = 'pdf_samples'
@@ -25,12 +204,9 @@ os.makedirs(PDF_SAMPLES_FOLDER, exist_ok=True)
 os.makedirs(DOWNLOADS_FOLDER, exist_ok=True)
 os.makedirs(PROCESSED_FOLDER, exist_ok=True)
 
-# Initialize handlers
-db_handler = DatabaseHandler()
-email_handler = EmailHandler(
-    sender_email=os.getenv('SENDER_EMAIL', 'default@example.com'),
-    internal_email=os.getenv('INTERNAL_EMAIL', 'internal@example.com')
-)
+# Print database status
+print("Database initialized successfully")
+print(f"Using database at: {db_handler.db_path}")
 
 @app.route('/')
 def index():
@@ -291,27 +467,40 @@ def send_email():
             flash('PDF file not found', 'error')
             return redirect(url_for('pending_requests'))
         
+        company_name = request_info['company_name']
+        
+        # Prepare email content
+        subject = f'Invoice {invoice_number} for {company_name}'
+        body = f'Please find attached the invoice {invoice_number} for the period {request_info["period_start"]} to {request_info["period_end"]}.'
+        
         # Send email with PDF attachment
-        success = email_handler.send_email_directly(
-            invoice_number=invoice_number,
-            pdf_path=pdf_path,
-            company_name=request_info['company_name'],
-            email=email_address
+        success = email_handler.send_email(
+            to_email=email_address,
+            subject=subject,
+            body=body,
+            attachments=[pdf_path]
         )
         
         if success:
-            # Move file to processed folder
-            processed_path = os.path.join(PROCESSED_FOLDER, os.path.basename(pdf_path))
-            shutil.move(pdf_path, processed_path)
-            
-            # Update database status
-            db_handler.mark_as_sent(invoice_number, email_address)
-            
-            flash('Email sent successfully', 'success')
+            try:
+                # Move file to processed folder first
+                processed_path = os.path.join(PROCESSED_FOLDER, os.path.basename(pdf_path))
+                shutil.move(pdf_path, processed_path)
+                
+                # Store the email association and mark as sent
+                db_handler.add_company_email(company_name, email_address)
+                db_handler.mark_as_sent(invoice_number, email_address)
+                
+                flash(f'Email sent successfully and saved {email_address} for future use with {company_name}', 'success')
+                return redirect(url_for('pending_requests'))
+            except Exception as e:
+                print(f"Error in post-send processing: {str(e)}")
+                flash('Email sent but there was an error updating some information', 'warning')
         else:
-            flash('Failed to send email', 'error')
+            flash('Failed to send email. Please check email settings and try again.', 'error')
         
     except Exception as e:
+        print(f"Error in send_email: {str(e)}")
         flash(f'Error sending email: {str(e)}', 'error')
     
     return redirect(url_for('pending_requests'))
@@ -319,31 +508,20 @@ def send_email():
 @app.route('/chat', methods=['POST'])
 def chat():
     data = request.get_json()
-    message = data.get('message', '').lower()
+    message = data.get('message', '')
     
-    # Simple response logic - you can expand this or integrate with a more sophisticated chatbot
-    responses = {
-        'hello': 'Hello! How can I help you today?',
-        'hi': 'Hi there! What can I do for you?',
-        'help': 'I can help you with:\n- Uploading PDFs\n- Processing PDFs\n- Sending emails\n- Downloading files',
-        'upload': 'You can upload PDFs by clicking the "Upload PDF" button in the navigation menu.',
-        'process': 'To process PDFs, go to the "Manual Processing" page and select the files you want to process.',
-        'email': 'You can send emails from the "Pending Requests" page by clicking the "Send Email" button next to any request.',
-        'download': 'PDFs can be downloaded from the "Pending Requests" page using the download button.',
-    }
-    
-    # Find the most relevant response
-    response = 'I\'m not sure how to help with that. Try asking about uploading, processing, or sending PDFs.'
-    for key, value in responses.items():
-        if key in message:
-            response = value
-            break
-    
-    return jsonify({'response': response})
+    try:
+        # Generate response using the model
+        response = generate_response(message)
+        return jsonify({'response': response})
+    except Exception as e:
+        print(f"Error generating response: {str(e)}")
+        return jsonify({'response': 'I apologize, but I encountered an error. Please try again.'})
 
 @app.route('/settings', methods=['GET', 'POST'])
 def settings():
     if request.method == 'POST':
+        # Handle settings form submission
         sender_email = request.form.get('sender_email')
         app_password = request.form.get('app_password')
         internal_email = request.form.get('internal_email')
@@ -353,36 +531,42 @@ def settings():
             return redirect(url_for('settings'))
         
         try:
-            # Save credentials
+            # Update email handler
             email_handler.sender_email = sender_email
             email_handler.internal_email = internal_email
-            success = email_handler.save_credentials(app_password)
             
-            if success:
-                # Test authentication
+            # Test authentication with new credentials
+            if email_handler.save_credentials(app_password):
                 if email_handler.authenticate():
+                    # Save configuration only if authentication succeeds
+                    config_handler.save_config(
+                        sender_email=sender_email,
+                        app_password=app_password,
+                        internal_email=internal_email
+                    )
                     flash('Email settings saved and authenticated successfully', 'success')
-                    return redirect(url_for('settings'))
                 else:
-                    flash('Email settings saved but authentication failed. Please check your credentials.', 'error')
+                    flash('Authentication failed with provided credentials', 'error')
             else:
-                flash('Failed to save email settings', 'error')
+                flash('Failed to save credentials', 'error')
                 
         except Exception as e:
             flash(f'Error saving settings: {str(e)}', 'error')
         
-    # Load saved credentials
-    saved_credentials = {}
-    try:
-        with open('email_config.json', 'r') as f:
-            saved_credentials = json.load(f)
-    except:
-        pass
-        
+        return redirect(url_for('settings'))
+    
+    # Get current configuration
+    email_config = config_handler.get_config()
+    
+    # Get all companies with their current emails
+    companies = db_handler.get_all_companies()
+    
     return render_template('settings.html',
-                         sender_email=email_handler.sender_email,
-                         internal_email=email_handler.internal_email,
-                         app_password=saved_credentials.get('app_password', ''))
+        sender_email=email_config['sender_email'],
+        app_password=email_config['app_password'],
+        internal_email=email_config['internal_email'],
+        companies=companies
+    )
 
 @app.route('/reset-environment', methods=['POST'])
 def reset_environment():
@@ -413,6 +597,36 @@ def reset_environment():
         flash(f'Error resetting environment: {str(e)}', 'error')
 
     return redirect(url_for('settings'))
+
+@app.route('/update-company-email', methods=['POST'])
+def update_company_email():
+    company_name = request.form.get('company_name')
+    new_email = request.form.get('new_email')
+    old_email = request.form.get('old_email')  # Optional
+    
+    if not company_name or not new_email:
+        flash('Company name and new email are required', 'error')
+        return redirect(url_for('settings'))
+    
+    try:
+        success = db_handler.update_company_email(company_name, new_email, old_email)
+        if success:
+            flash(f'Email for {company_name} updated to {new_email}', 'success')
+        else:
+            flash('Failed to update email', 'error')
+    except Exception as e:
+        flash(f'Error updating email: {str(e)}', 'error')
+    
+    return redirect(url_for('settings'))
+
+@app.route('/company-email-history/<company_name>')
+def company_email_history(company_name):
+    try:
+        history = db_handler.get_company_email_history(company_name)
+        return render_template('email_history.html', company_name=company_name, history=history)
+    except Exception as e:
+        flash(f'Error getting email history: {str(e)}', 'error')
+        return redirect(url_for('settings'))
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000) 

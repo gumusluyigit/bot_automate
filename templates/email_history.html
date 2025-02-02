@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+
+{% block title %}Email History - {{ company_name }}{% endblock %}
+
+{% block content %}
+<div class="container">
+    <h1 class="mb-4">Email History for {{ company_name }}</h1>
+
+    <!-- Current Email -->
+    <div class="card mb-4">
+        <div class="card-header">
+            <h5 class="mb-0">Current Email</h5>
+        </div>
+        <div class="card-body">
+            {% if history.current_email %}
+                <p class="mb-2">Email: <strong>{{ history.current_email }}</strong></p>
+                <p class="text-muted">Last Updated: {{ history.last_updated }}</p>
+            {% else %}
+                <p class="text-muted">No email address set</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Update Email Form -->
+    <div class="card mb-4">
+        <div class="card-header">
+            <h5 class="mb-0">Update Email</h5>
+        </div>
+        <div class="card-body">
+            <form action="{{ url_for('update_company_email') }}" method="POST">
+                <input type="hidden" name="company_name" value="{{ company_name }}">
+                {% if history.current_email %}
+                    <input type="hidden" name="old_email" value="{{ history.current_email }}">
+                {% endif %}
+                
+                <div class="mb-3">
+                    <label for="new_email" class="form-label">New Email Address</label>
+                    <input type="email" class="form-control" id="new_email" name="new_email" required>
+                </div>
+                
+                <button type="submit" class="btn btn-primary">Update Email</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Email History -->
+    {% if history.history %}
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Email Update History</h5>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Change</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for entry in history.history %}
+                                <tr>
+                                    <td>{{ entry.timestamp }}</td>
+                                    <td>{{ entry.message }}</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    {% endif %}
+</div>
+{% endblock %} 
