@@ -22,8 +22,8 @@ wheels/
 
 # Virtual Environment
 venv/
-ENV/
 env/
+ENV/
 
 # IDE
 .idea/
@@ -32,12 +32,16 @@ env/
 *.swo
 
 # Project specific
+*.db
+*.db-journal
+email_config.json
 gmail_config.json
-automation_log.txt
-db/
+.env
+uploads/
 processed/
-downloads/
-*.pdf
+pdf_samples/
+
+# Logs
 *.log
 
 # Environment variables

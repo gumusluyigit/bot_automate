@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+
+{% block title %}Pending Requests - Receipt Automation{% endblock %}
+
+{% block content %}
+<h1 class="mb-4">Pending Requests</h1>
+
+{% if requests %}
+<div class="card">
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-striped">
+                <thead>
+                    <tr>
+                        <th>Invoice Number</th>
+                        <th>Company Name</th>
+                        <th>Period Start</th>
+                        <th>Period End</th>
+                        <th class="text-end">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for request in requests %}
+                    <tr>
+                        <td>{{ request.invoice_number if request.invoice_number is defined else 'N/A' }}</td>
+                        <td>{{ request.company_name if request.company_name is defined else 'Unknown' }}</td>
+                        <td>{{ request.period_start if request.period_start is defined else 'N/A' }}</td>
+                        <td>{{ request.period_end if request.period_end is defined else 'N/A' }}</td>
+                        <td class="text-end">
+                            <button type="button" 
+                                    class="btn btn-primary btn-sm"
+                                    data-bs-toggle="modal"
+                                    data-bs-target="#emailModal"
+                                    data-invoice="{{ request.invoice_number if request.invoice_number is defined else 'N/A' }}"
+                                    data-company="{{ request.company_name if request.company_name is defined else 'Unknown' }}">
+                                <i class="bi bi-envelope"></i> Send Email
+                            </button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Email Modal -->
+<div class="modal fade" id="emailModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Send Email</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form action="{{ url_for('send_email') }}" method="POST">
+                <div class="modal-body">
+                    <input type="hidden" name="invoice_number" id="modalInvoiceNumber">
+                    <div class="mb-3">
+                        <label for="email_address" class="form-label">Email Address</label>
+                        <input type="email" class="form-control" id="email_address" name="email_address" required>
+                    </div>
+                    <p class="text-muted">
+                        Sending email for invoice: <span id="modalInvoiceDisplay"></span>
+                    </p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Send Email</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% else %}
+<div class="alert alert-info">
+    No pending requests found. Go to <a href="{{ url_for('manual_process') }}" class="alert-link">Manual Processing</a> to process PDFs.
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const emailModal = document.getElementById('emailModal');
+    if (emailModal) {
+        emailModal.addEventListener('show.bs.modal', function(event) {
+            const button = event.relatedTarget;
+            const invoice = button.getAttribute('data-invoice');
+            const company = button.getAttribute('data-company');
+            
+            document.getElementById('modalInvoiceNumber').value = invoice;
+            document.getElementById('modalInvoiceDisplay').textContent = `${invoice} (${company})`;
+        });
+    }
+});
+</script>
+{% endblock %} 

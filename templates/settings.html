@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+
+{% block title %}Email Settings - Receipt Automation{% endblock %}
+
+{% block content %}
+<div class="container">
+    <h1 class="mb-4">Email Settings</h1>
+    
+    <div class="card mb-4">
+        <div class="card-body">
+            <form method="POST">
+                <div class="mb-3">
+                    <label for="sender_email" class="form-label">Sender Email (Gmail)</label>
+                    <input type="email" class="form-control" id="sender_email" name="sender_email" 
+                           value="{{ sender_email }}" required>
+                    <div class="form-text">
+                        This must be a Gmail address that will be used to send emails.
+                    </div>
+                </div>
+                
+                <div class="mb-3">
+                    <label for="app_password" class="form-label">Gmail App Password</label>
+                    <input type="password" class="form-control" id="app_password" name="app_password" 
+                           value="{{ app_password }}" required>
+                    <div class="form-text">
+                        <strong>Important:</strong> This must be an App Password, not your regular Gmail password.<br>
+                        To generate an App Password:
+                        <ol>
+                            <li>Go to your Google Account settings</li>
+                            <li>Enable 2-Step Verification if not already enabled</li>
+                            <li>Go to Security → App Passwords</li>
+                            <li>Select 'Mail' and your device</li>
+                            <li>Use the generated 16-character password</li>
+                        </ol>
+                    </div>
+                </div>
+                
+                <div class="mb-3">
+                    <label for="internal_email" class="form-label">Internal Staff Email</label>
+                    <input type="email" class="form-control" id="internal_email" name="internal_email" 
+                           value="{{ internal_email }}" required>
+                    <div class="form-text">
+                        This email address will receive notifications about missing company emails.
+                    </div>
+                </div>
+                
+                <button type="submit" class="btn btn-primary">Save Settings</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Reset Environment Section -->
+    <div class="card border-danger">
+        <div class="card-header bg-danger text-white">
+            <h5 class="mb-0">Reset Environment</h5>
+        </div>
+        <div class="card-body">
+            <p class="text-danger"><strong>Warning:</strong> This action will:</p>
+            <ul>
+                <li>Clear all pending requests</li>
+                <li>Empty the downloads folder</li>
+                <li>Empty the processed folder</li>
+                <li>Reset the database</li>
+            </ul>
+            <form action="{{ url_for('reset_environment') }}" method="POST" onsubmit="return confirm('Are you sure you want to reset the environment? This action cannot be undone.');">
+                <button type="submit" class="btn btn-danger">
+                    <i class="bi bi-exclamation-triangle"></i> Reset Environment
+                </button>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %} 

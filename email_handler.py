@@ -22,6 +22,9 @@ class EmailHandler:
         self.smtp_port = 587
         self.app_password = None  # Will be set through save_credentials
         
+        # Try to load credentials on initialization
+        self._load_credentials()
+        
     def init_db(self):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
@@ -80,12 +83,14 @@ class EmailHandler:
         conn.close()
         
     def save_credentials(self, app_password: str):
-        """Save Gmail App Password"""
+        """Save Gmail App Password and email settings"""
         try:
             credentials = {
+                'sender_email': self.sender_email,
+                'internal_email': self.internal_email,
                 'app_password': app_password
             }
-            with open('gmail_config.json', 'w') as f:
+            with open('email_config.json', 'w') as f:
                 json.dump(credentials, f)
             self.app_password = app_password
             return True
@@ -96,11 +101,13 @@ class EmailHandler:
     def _load_credentials(self):
         """Load Gmail credentials from config file"""
         try:
-            if os.path.exists('gmail_config.json'):
-                with open('gmail_config.json', 'r') as f:
+            if os.path.exists('email_config.json'):
+                with open('email_config.json', 'r') as f:
                     credentials = json.load(f)
                     self.app_password = credentials.get('app_password')
-                    return True
+                    self.sender_email = credentials.get('sender_email', self.sender_email)
+                    self.internal_email = credentials.get('internal_email', self.internal_email)
+                    return bool(self.app_password and self.sender_email and self.internal_email)
             return False
         except Exception as e:
             print(f"Error loading credentials: {str(e)}")
@@ -112,22 +119,12 @@ class EmailHandler:
             if not self.app_password:
                 if not self._load_credentials():
                     raise Exception(
-                        "No credentials configured. Please make sure to:\n"
-                        "1. Enter your Gmail address\n"
-                        "2. Generate an App Password (NOT your regular Gmail password)\n"
-                        "To generate an App Password:\n"
-                        "1. Go to your Google Account settings\n"
-                        "2. Enable 2-Step Verification if not already enabled\n"
-                        "3. Go to Security → App Passwords\n"
-                        "4. Select 'Mail' and your device\n"
-                        "5. Use the generated 16-character password"
+                        "No credentials configured. Please configure your email settings first."
                     )
                     
             if not self.sender_email or '@gmail.com' not in self.sender_email.lower():
                 raise Exception(
-                    "Invalid Gmail address. Please make sure to:\n"
-                    "1. Use a complete Gmail address (example@gmail.com)\n"
-                    "2. Only Gmail addresses are supported"
+                    "Invalid Gmail address. Please make sure to use a complete Gmail address (example@gmail.com)"
                 )
                     
             server = smtplib.SMTP(self.smtp_server, self.smtp_port)
@@ -135,22 +132,13 @@ class EmailHandler:
             
             try:
                 server.login(self.sender_email, self.app_password)
+                server.quit()
+                return True
             except smtplib.SMTPAuthenticationError:
                 raise Exception(
-                    "Authentication failed. Please make sure:\n"
-                    "1. You're using an App Password, NOT your regular Gmail password\n"
-                    "2. 2-Step Verification is enabled on your Google Account\n"
-                    "3. The App Password was generated for 'Mail' access\n"
-                    "4. You've copied the 16-character App Password correctly\n"
-                    "\nTo generate a new App Password:\n"
-                    "1. Go to Google Account → Security\n"
-                    "2. Find 'App Passwords' under 2-Step Verification\n"
-                    "3. Generate a new password for 'Mail'"
+                    "Authentication failed. Please check your Gmail App Password in Settings."
                 )
                 
-            server.quit()
-            return True
-            
         except Exception as e:
             print(f"Authentication error: {str(e)}")
             return False
@@ -485,7 +473,7 @@ class EmailHandler:
         """Get email sending history"""
         return self.db.get_email_history(invoice_number)
 
-    def send_email_directly(self, invoice_number: str, pdf_path: str, company_name: str, email: str) -> bool:
+    def send_email_directly(self, invoice_number: str, pdf_path: str, company_name: str, email: str, subject: str = None, body: str = None) -> bool:
         """Send email directly for known invoice numbers"""
         try:
             if not self.app_password:
@@ -496,13 +484,17 @@ class EmailHandler:
             msg = MIMEMultipart()
             msg['From'] = self.sender_email
             msg['To'] = email
-            msg['Subject'] = f"Invoice from {company_name}"
+            msg['Subject'] = subject or f"Invoice from {company_name}"
             
-            # Attach PDF
-            with open(pdf_path, 'rb') as f:
-                pdf = MIMEApplication(f.read(), _subtype='pdf')
-                pdf.add_header('Content-Disposition', 'attachment', filename=os.path.basename(pdf_path))
-                msg.attach(pdf)
+            # Add body text
+            msg.attach(MIMEText(body or f"Please find attached the invoice from {company_name}.", 'plain'))
+            
+            # Attach PDF if provided
+            if pdf_path and os.path.exists(pdf_path):
+                with open(pdf_path, 'rb') as f:
+                    pdf = MIMEApplication(f.read(), _subtype='pdf')
+                    pdf.add_header('Content-Disposition', 'attachment', filename=os.path.basename(pdf_path))
+                    msg.attach(pdf)
             
             # Send email
             server = smtplib.SMTP(self.smtp_server, self.smtp_port)
@@ -511,15 +503,16 @@ class EmailHandler:
             server.send_message(msg)
             server.quit()
             
-            # Record in sent_emails
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO sent_emails (invoice_number, email, company_name, status, pdf_path)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (invoice_number, email, company_name, 'sent', pdf_path))
-            conn.commit()
-            conn.close()
+            # Record in sent_emails only if it's not a notification email
+            if pdf_path:
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO sent_emails (invoice_number, email, company_name, status, pdf_path)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (invoice_number, email, company_name, 'sent', pdf_path))
+                conn.commit()
+                conn.close()
             
             return True
         except Exception as e:

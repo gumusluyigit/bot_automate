@@ -1,0 +1,258 @@
+{% extends "base.html" %}
+
+{% block title %}Manual Processing - Receipt Automation{% endblock %}
+
+{% block content %}
+<h1 class="mb-4">Manual PDF Processing</h1>
+
+<div class="row">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-body">
+                <form action="{{ url_for('manual_process') }}" method="POST" id="manual-process-form">
+                    <div class="mb-3">
+                        <label for="week_select" class="form-label">Select Week</label>
+                        <select class="form-select" id="week_select" name="selected_week" required>
+                            <!-- Options will be populated by JavaScript -->
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">PDFs to be Processed</label>
+                        <div class="list-group" id="pdf-list">
+                            {% for pdf in pdfs %}
+                            <div class="list-group-item pdf-item" data-start="{{ pdf.period_start }}" data-end="{{ pdf.period_end }}">
+                                <div>
+                                    <strong>{{ pdf.company_name }}</strong>
+                                    <span class="text-muted ms-2">Invoice #{{ pdf.invoice_number }}</span>
+                                    <br>
+                                    <small class="text-muted">Period: {{ pdf.period_start }} to {{ pdf.period_end }}</small>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                        <div id="no-pdfs-message" class="mt-3 py-2 px-3 rounded" style="display: none; background-color: #fff3cd; color: #856404; border: 1px solid #ffeeba;">
+                            <i class="bi bi-exclamation-triangle me-2"></i>
+                            No PDFs found for the selected week
+                        </div>
+                    </div>
+
+                    <div class="text-end">
+                        <button type="submit" class="btn btn-primary" id="process-button">
+                            Process PDFs for Selected Week
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">Processing Status</h5>
+                <div id="processing-status">
+                    <div class="py-2 px-3 rounded" style="background-color: #cff4fc; color: #055160; border: 1px solid #b6effb;">
+                        <i class="bi bi-info-circle me-2"></i>
+                        Select a week to begin processing
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const form = document.getElementById('manual-process-form');
+    const weekSelect = document.getElementById('week_select');
+    const processButton = document.getElementById('process-button');
+    const statusDiv = document.getElementById('processing-status');
+    const pdfItems = document.querySelectorAll('.pdf-item');
+    const noPdfsMessage = document.getElementById('no-pdfs-message');
+
+    // Function to get Monday of the current week
+    function getMonday(d) {
+        d = new Date(d);
+        const day = d.getDay();
+        const diff = d.getDate() - day + (day === 0 ? -6 : 1); // adjust when day is sunday
+        return new Date(d.setDate(diff));
+    }
+
+    // Function to format date as YYYY-MM-DD
+    function formatDate(date) {
+        return date.toISOString().split('T')[0];
+    }
+
+    // Function to format date for display
+    function formatDateDisplay(date) {
+        return date.toLocaleDateString('en-US', { 
+            year: 'numeric', 
+            month: 'short', 
+            day: 'numeric'
+        });
+    }
+
+    // Generate weeks (current week and previous 11 weeks)
+    const today = new Date();
+    const currentMonday = getMonday(today);
+    
+    for (let i = 0; i < 12; i++) {
+        const monday = new Date(currentMonday);
+        monday.setDate(monday.getDate() - (i * 7));
+        const sunday = new Date(monday);
+        sunday.setDate(sunday.getDate() + 6);
+
+        const option = document.createElement('option');
+        option.value = formatDate(monday) + ',' + formatDate(sunday);
+        option.text = `${formatDateDisplay(monday)} - ${formatDateDisplay(sunday)}`;
+        if (i === 0) option.selected = true;
+        weekSelect.appendChild(option);
+    }
+
+    // Function to check if date ranges overlap
+    function doDateRangesOverlap(start1, end1, start2, end2) {
+        // Convert all dates to Date objects
+        const s1 = new Date(start1);
+        const e1 = new Date(end1);
+        const s2 = new Date(start2);
+        const e2 = new Date(end2);
+        
+        console.log('Comparing date ranges:');
+        console.log('Week:', s1.toISOString().split('T')[0], 'to', e1.toISOString().split('T')[0]);
+        console.log('PDF:', s2.toISOString().split('T')[0], 'to', e2.toISOString().split('T')[0]);
+        
+        // Check if the ranges overlap
+        const overlap = s1 <= e2 && s2 <= e1;
+        console.log('Overlap:', overlap);
+        return overlap;
+    }
+
+    // Update PDF visibility based on selected week
+    weekSelect.addEventListener('change', function() {
+        const [weekStart, weekEnd] = this.value.split(',');
+        let visibleCount = 0;
+        
+        console.log('Selected week:', weekStart, 'to', weekEnd);
+        
+        pdfItems.forEach(item => {
+            const pdfStart = item.dataset.start;
+            const pdfEnd = item.dataset.end;
+            
+            console.log('Checking PDF:', item.querySelector('strong').textContent);
+            console.log('PDF dates:', pdfStart, 'to', pdfEnd);
+            
+            // Show PDF if its period overlaps with selected week
+            if (doDateRangesOverlap(weekStart, weekEnd, pdfStart, pdfEnd)) {
+                item.style.display = '';
+                visibleCount++;
+                console.log('PDF is visible');
+            } else {
+                item.style.display = 'none';
+                console.log('PDF is hidden');
+            }
+        });
+
+        console.log('Total visible PDFs:', visibleCount);
+
+        // Show/hide no PDFs message and update button state
+        noPdfsMessage.style.display = visibleCount > 0 ? 'none' : 'block';
+        processButton.disabled = visibleCount === 0;
+    });
+
+    // Trigger initial visibility update
+    weekSelect.dispatchEvent(new Event('change'));
+
+    // Process button click handler
+    document.getElementById('process-button').addEventListener('click', function() {
+        const selectedWeek = document.getElementById('week_select').value;
+        const button = this;
+        const originalText = button.innerHTML;
+        
+        if (!selectedWeek) {
+            alert('Please select a week first');
+            return;
+        }
+        
+        // Show loading state
+        button.disabled = true;
+        button.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Processing...';
+        
+        // Send request to process PDFs
+        fetch('/manual-process', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: `selected_week=${selectedWeek}`
+        })
+        .then(response => response.json())
+        .then(data => {
+            const resultDiv = document.getElementById('processing-status');
+            if (data.success) {
+                // Show success message with details
+                let message = `<div class="alert alert-success">
+                    <h6>Processing Complete</h6>
+                    <p>${data.message}</p>`;
+                
+                if (data.processed_files && data.processed_files.length > 0) {
+                    message += `<p><strong>Processed Files:</strong></p><ul>`;
+                    data.processed_files.forEach(file => {
+                        message += `<li>${file.company_name} (Invoice #${file.invoice_number})</li>`;
+                    });
+                    message += '</ul>';
+                }
+                
+                if (data.auto_emailed_files && data.auto_emailed_files.length > 0) {
+                    message += `<p><strong>Auto-emailed Files:</strong></p><ul>`;
+                    data.auto_emailed_files.forEach(file => {
+                        message += `<li>${file.company_name} (Invoice #${file.invoice_number}) to ${file.email}</li>`;
+                    });
+                    message += '</ul>';
+                }
+                
+                message += '</div>';
+                resultDiv.innerHTML = message;
+                
+                // Update visibility of PDFs
+                weekSelect.dispatchEvent(new Event('change'));
+            } else {
+                // Show detailed error message
+                resultDiv.innerHTML = `<div class="alert alert-danger">
+                    <h6>Error Processing PDFs</h6>
+                    <p>${data.error || 'An unexpected error occurred'}</p>
+                    <p>Please check the following:</p>
+                    <ul>
+                        <li>Email settings are properly configured in Settings page</li>
+                        <li>All required files are accessible</li>
+                        <li>Selected PDFs are valid and readable</li>
+                    </ul>
+                </div>`;
+            }
+        })
+        .catch(error => {
+            // Show detailed error message
+            const resultDiv = document.getElementById('processing-status');
+            resultDiv.innerHTML = `<div class="alert alert-danger">
+                <h6>Error Processing PDFs</h6>
+                <p>${error.message || 'An unexpected error occurred'}</p>
+                <p>Please check the following:</p>
+                <ul>
+                    <li>Your internet connection is stable</li>
+                    <li>The application server is running</li>
+                    <li>Try refreshing the page and trying again</li>
+                </ul>
+            </div>`;
+            console.error('Error:', error);
+        })
+        .finally(() => {
+            // Reset button state
+            button.disabled = false;
+            button.innerHTML = originalText;
+        });
+    });
+});
+</script>
+{% endblock %} 

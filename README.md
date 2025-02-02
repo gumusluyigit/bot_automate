@@ -1,84 +1,126 @@
-# Receipt Automation System
+# Receipt Automation
 
-A Python-based system for automating the processing of PDF invoices and managing email communications.
+A web application for automating receipt processing and email handling.
 
 ## Features
 
-- PDF invoice processing and data extraction
-- Automated email handling with Gmail integration
-- Invoice data storage and management
-- User-friendly GUI interface
-- Chat interface for querying invoice information
-- Support for Turkish language queries
+- PDF Receipt Processing
+- Automated Email Handling
+- Database Management
+- Web Interface for Easy Access
+- RESTful API Backend
 
-## Requirements
+## Prerequisites
 
-- Python 3.8+
-- PyPDF2
-- tkinter
-- tkcalendar
-- sqlite3
-- O365 (for Microsoft integration)
+- Python 3.9 or higher
+- Node.js 18 or higher
+- Docker (optional)
 
 ## Installation
 
+### Option 1: Running with Docker
+
 1. Clone the repository:
 ```bash
-git clone [repository-url]
-cd receipt-automation
+git clone https://github.com/gumusluyigit/bot_automate.git
+cd bot_automate
 ```
 
-2. Create and activate a virtual environment:
+2. Build and run with Docker Compose:
 ```bash
+docker-compose up --build
+```
+
+The application will be available at http://localhost:5000
+
+### Option 2: Manual Setup
+
+1. Clone the repository:
+```bash
+git clone https://github.com/gumusluyigit/bot_automate.git
+cd bot_automate
+```
+
+2. Set up the backend:
+```bash
+# Create and activate virtual environment
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
 
-3. Install dependencies:
-```bash
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-## Configuration
-
-1. Gmail Setup:
-   - Enable 2-Step Verification in your Google Account
-   - Generate an App Password for the application
-   - Configure the email settings in the application
-
-2. Directory Setup:
-   - The system will automatically create necessary directories:
-     - `downloads/`: For temporary storage of downloaded PDFs
-     - `processed/`: For processed PDFs
-     - `db/`: For SQLite database storage
-
-## Usage
-
-1. Run the application:
+3. Set up the frontend:
 ```bash
-python gui.py
+cd frontend
+npm install
+npm run build
+cd ..
 ```
 
-2. Main Features:
-   - Process PDFs by week
-   - View and manage pending requests
-   - Send emails with processed invoices
-   - Query invoice information via chat interface
+4. Create necessary directories:
+```bash
+mkdir uploads processed
+```
 
-3. Chat Commands:
-   - Check amount due: "[company] şirketinin [date] haftasının borcu"
-   - Check email: "[company] şirketinin mail adresi"
-   - Check due date: "[company] şirketinin son ödeme günü"
-   - Process PDFs: "[date] haftasının pdflerini işle"
+5. Set up environment variables:
+```bash
+cp .env.example .env
+# Edit .env with your configuration
+```
 
-## Database Structure
+6. Run the application:
+```bash
+python app.py
+```
 
-The system uses SQLite with the following main tables:
-- `invoice_emails`: Stores email mappings
-- `invoice_details`: Stores PDF content information
-- `pending_requests`: Manages pending email requests
-- `sent_emails`: Tracks sent emails
+The application will be available at http://localhost:5000
+
+## API Endpoints
+
+- `GET /api/health` - Health check endpoint
+- `POST /api/process_pdf` - Process a PDF file
+- `GET /api/pending_requests` - Get all pending requests
+- `POST /api/send_email` - Send email with receipt
+- `GET /api/download_pdf/<invoice_number>` - Download a processed PDF
+
+## Development
+
+### Backend Development
+
+The backend is built with Flask and provides RESTful APIs for the frontend.
+
+To run the backend in development mode:
+```bash
+python app.py
+```
+
+### Frontend Development
+
+The frontend is built with React and Material-UI.
+
+To run the frontend in development mode:
+```bash
+cd frontend
+npm start
+```
+
+## Testing
+
+Run the tests with:
+```bash
+python -m pytest
+```
+
+## Contributing
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
 ## License
 
-[Your License Here]
+This project is licensed under the MIT License - see the LICENSE file for details.

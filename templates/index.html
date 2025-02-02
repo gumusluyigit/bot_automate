@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block title %}Home - Receipt Automation{% endblock %}
+
+{% block content %}
+<div class="container">
+    <h1 class="mb-4">Receipt Automation Dashboard</h1>
+    
+    <div class="row">
+        <div class="col-md-12">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">Recent Pending Requests</h5>
+                </div>
+                <div class="card-body">
+                    {% if recent_requests %}
+                        <div class="list-group">
+                            {% for request in recent_requests %}
+                            <div class="list-group-item">
+                                <div class="d-flex w-100 justify-content-between">
+                                    <h6 class="mb-1">{{ request.company_name }}</h6>
+                                    <small class="text-muted">{{ request.date }}</small>
+                                </div>
+                                <p class="mb-1">Invoice #{{ request.invoice_number }}</p>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    {% else %}
+                        <p class="text-muted">No pending requests found.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Add any dashboard-specific JavaScript here
+</script>
+{% endblock %} 
