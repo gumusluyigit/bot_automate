@@ -2,8 +2,7 @@ PyPDF2==3.0.1
 tkcalendar==1.6.1
 O365==2.0.26
 python-dotenv==1.0.0
-transformers==4.36.2
-torch==2.1.2
-accelerate==0.25.0
-bitsandbytes==0.41.3
-sentencepiece==0.1.99 
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch
+transformers
+accelerate==0.25.0 

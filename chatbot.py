@@ -298,48 +298,46 @@ class Chatbot:
     def get_response(self, text: str) -> str:
         """Get response using DeepSeek models"""
         if not text:
-            return self.generate_response("Merhaba! Size nasıl yardımcı olabilirim?")
+            return "Merhaba! Size nasıl yardımcı olabilirim?"
             
         text = text.lower().strip()
         
-        # Check for basic interactions first
+        # For greetings, always respond naturally
         if self._is_greeting(text):
-            return self._handle_greeting(text)
-        elif self._is_thanks(text):
-            return self.generate_response("Rica ederim! Başka bir konuda yardımcı olabilir miyim?")
-        elif self._is_goodbye(text):
-            return self.generate_response("Görüşmek üzere! Başka bir işleminiz olursa yardımcı olmaktan memnuniyet duyarım.")
-        elif self._is_help(text):
-            return self.generate_help_response()
-        elif self._is_status_request(text):
-            return self._get_status_info()
+            return "Merhaba! Size nasıl yardımcı olabilirim?"
             
-        # If no basic interaction matches, try to process as a command
+        # Check if it's a command
         command_response = self.process_command(text)
         if command_response is not None:
             return command_response
             
-        # If nothing matches, use DeepSeek to generate a response
-        return self.generate_response(text)
+        # For all other interactions, use DeepSeek if available
+        if self.deepseek.is_loaded():
+            try:
+                response = self.deepseek.generate_response(text)
+                if response and not response.startswith("Error"):
+                    return response
+            except Exception as e:
+                print(f"Error generating response: {str(e)}")
+        
+        # Fallback to help message
+        return self.responses['help']
         
     def generate_response(self, text: str, model_type: str = "chat") -> str:
         """Generate response using DeepSeek models"""
-        if not self.deepseek.is_loaded():
-            # Fallback responses if models aren't loaded
-            if "nasıl" in text or "yardım" in text:
-                return self.generate_help_response()
-            return "Üzgünüm, şu anda size yardımcı olamıyorum. Lütfen daha sonra tekrar deneyin."
-            
-        # Prepare prompt with context
-        prompt = f"Sen Türkçe konuşan bir PDF işleme asistanısın. Kullanıcı mesajı: {text}\n\nYanıt:"
+        # Always try to use the model first
+        if self.deepseek.is_loaded():
+            try:
+                response = self.deepseek.generate_response(text, model_type)
+                if response and not response.startswith("Error"):
+                    return response
+            except Exception as e:
+                print(f"Error generating response: {str(e)}")
         
-        # Use appropriate model based on query type
-        if any(word in text.lower() for word in ["nasıl", "yardım", "örnek", "selam", "merhaba"]):
-            model_type = "chat"  # Use chat model for conversational queries
-        else:
-            model_type = "base"  # Use base model for factual/technical queries
-            
-        return self.deepseek.generate_response(prompt, model_type)
+        # Only use fallback responses if model fails
+        if "nasıl" in text or "yardım" in text:
+            return self.responses['help']
+        return "Üzgünüm, şu anda size yardımcı olamıyorum. Lütfen daha sonra tekrar deneyin."
         
     def generate_help_response(self) -> str:
         """Generate help response"""

@@ -60,4 +60,12 @@ pdf_samples/
 downloads/
 
 # IDE specific files
-.DS_Store 
+.DS_Store
+
+# Model files
+models/
+*.gguf
+*.bin
+*.pt
+*.pth
+*.safetensors 

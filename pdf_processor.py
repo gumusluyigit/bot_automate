@@ -104,73 +104,72 @@ class PDFProcessor:
     @staticmethod
     def extract_invoice_info(pdf_path: str) -> dict:
         """Extract invoice information from PDF file"""
+        # Initialize dictionary with default values
+        info = {
+            'invoice_number': None,
+            'account_code': None,
+            'invoice_date': None,
+            'period_start': None,
+            'period_end': None,
+            'due_date': None,
+            'amount_due': None,
+            'currency': 'USD'
+        }
+        
         try:
-            # Initialize dictionary with default values
-            info = {
-                'invoice_number': None,
-                'account_code': None,
-                'invoice_date': None,
-                'period_start': None,
-                'period_end': None,
-                'due_date': None,
-                'amount_due': None,
-                'currency': 'USD'
-            }
-            
-            # First try to extract text from PDF
-            try:
-                with open(pdf_path, 'rb') as file:
-                    reader = PyPDF2.PdfReader(file)
-                    text = reader.pages[0].extract_text()
-                    print(f"Extracted text from PDF: {text}")  # Debug print
-                    
-                    # Try to extract invoice number (Invoice # x)
-                    invoice_match = re.search(r'Invoice\s*#\s*(\S+)', text)
-                    if invoice_match:
-                        info['invoice_number'] = invoice_match.group(1)
-                        print(f"Found invoice number: {info['invoice_number']}")  # Debug print
-                    
-                    # Extract dates from filename as fallback for period dates
-                    filename = os.path.basename(pdf_path)
-                    match = re.match(r'([a-zA-Z0-9_]+)(?:_tdm)?_(\d{8})-(\d{8})\.pdf', filename)
-                    if match:
-                        # Convert YYYYMMDD to YYYY-MM-DD format
-                        start_date = f"{match.group(2)[:4]}-{match.group(2)[4:6]}-{match.group(2)[6:]}"
-                        end_date = f"{match.group(3)[:4]}-{match.group(3)[4:6]}-{match.group(3)[6:]}"
-                        info['period_start'] = start_date
-                        info['period_end'] = end_date
-                        
-                        # Only use filename-based invoice number if we couldn't get it from PDF
-                        if not info['invoice_number']:
-                            company = match.group(1)
-                            info['invoice_number'] = f"INV_{company}_{match.group(2)}"
-                    
-                    # Extract other details from PDF content
-                    account_match = re.search(r'Customer Account Code:\s*(\S+)', text)
-                    if account_match:
-                        info['account_code'] = account_match.group(1)
-                    
-                    date_match = re.search(r'Invoice Date:\s*(\d{4}-\d{2}-\d{2})', text)
-                    if date_match:
-                        info['invoice_date'] = date_match.group(1)
-                    
-                    period_match = re.search(r'Invoice Period:\s*(\d{4}-\d{2}-\d{2})\s*to\s*(\d{4}-\d{2}-\d{2})', text)
-                    if period_match:
-                        info['period_start'] = period_match.group(1)
-                        info['period_end'] = period_match.group(2)
-                    
-                    due_match = re.search(r'Due Date:\s*(\d{4}-\d{2}-\d{2})', text)
-                    if due_match:
-                        info['due_date'] = due_match.group(1)
-                    
-                    amount_match = re.search(r'Total Amount Due:\s*([\d.]+)', text)
-                    if amount_match:
-                        info['amount_due'] = float(amount_match.group(1))
+            with open(pdf_path, 'rb') as file:
+                reader = PyPDF2.PdfReader(file)
+                text = reader.pages[0].extract_text()
+                print(f"Extracted text from PDF: {text}")  # Debug print
                 
-            except Exception as e:
-                print(f"Warning: Could not extract text from PDF: {str(e)}")
-                # Continue with filename-based info
+                # Try to extract invoice number (Invoice # x)
+                invoice_match = re.search(r'Invoice\s*#\s*(\S+)', text)
+                if invoice_match:
+                    info['invoice_number'] = invoice_match.group(1)
+                    print(f"Found invoice number: {info['invoice_number']}")  # Debug print
+                
+                # Extract dates from filename as fallback for period dates
+                filename = os.path.basename(pdf_path)
+                match = re.match(r'([a-zA-Z0-9_]+)(?:_tdm)?_(\d{8})-(\d{8})\.pdf', filename)
+                if match:
+                    # Convert YYYYMMDD to YYYY-MM-DD format
+                    start_date = f"{match.group(2)[:4]}-{match.group(2)[4:6]}-{match.group(2)[6:]}"
+                    end_date = f"{match.group(3)[:4]}-{match.group(3)[4:6]}-{match.group(3)[6:]}"
+                    info['period_start'] = start_date
+                    info['period_end'] = end_date
+                    
+                    # Only use filename-based invoice number if we couldn't get it from PDF
+                    if not info['invoice_number']:
+                        company = match.group(1)
+                        info['invoice_number'] = f"INV_{company}_{match.group(2)}"
+                
+                # Extract other details from PDF content
+                account_match = re.search(r'Customer Account Code:\s*(\S+)', text)
+                if account_match:
+                    info['account_code'] = account_match.group(1)
+                
+                date_match = re.search(r'Invoice Date:\s*(\d{4}-\d{2}-\d{2})', text)
+                if date_match:
+                    info['invoice_date'] = date_match.group(1)
+                
+                period_match = re.search(r'Invoice Period:\s*(\d{4}-\d{2}-\d{2})\s*to\s*(\d{4}-\d{2}-\d{2})', text)
+                if period_match:
+                    info['period_start'] = period_match.group(1)
+                    info['period_end'] = period_match.group(2)
+                
+                due_match = re.search(r'Due Date:\s*(\d{4}-\d{2}-\d{2})', text)
+                if due_match:
+                    info['due_date'] = due_match.group(1)
+                
+                amount_match = re.search(r'Total Amount Due:\s*([\d.]+)', text)
+                if amount_match:
+                    info['amount_due'] = float(amount_match.group(1))
+        
+        except Exception as e:
+            print(f"Warning: Could not extract text from PDF: {str(e)}")
+            # Continue with filename-based info
             
+        try:
             # Set hardcoded values for specific companies if amount not found
             if info['amount_due'] is None:
                 company_amounts = {
@@ -277,12 +276,12 @@ class PDFProcessor:
                             info['period_end'] = datetime.strptime(match.group(3), '%Y%m%d')
                         except ValueError as e:
                             print(f"Error parsing dates from filename: {str(e)}")
-            
+                    
             # Check if we found all required information
             required_fields = ['invoice_number', 'company_name', 'period_start', 'period_end']
             if all(field in info for field in required_fields):
                 return info
-            
+                
             missing_fields = [field for field in required_fields if field not in info]
             raise Exception(f"Could not extract required information from PDF. Missing fields: {missing_fields}")
             
