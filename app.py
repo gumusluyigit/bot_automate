@@ -17,9 +17,9 @@ load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'your-secret-key-here')  # Required for flash messages
 
-# DeepSeek API Configuration
-DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
-DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"  # Replace with actual API endpoint
+# API Configuration
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
 
 # Initialize handlers
 config_handler = ConfigHandler()
@@ -37,21 +37,78 @@ if email_config['app_password']:
     email_handler.save_credentials(email_config['app_password'])
 
 def generate_response(user_input):
-    if not DEEPSEEK_API_KEY:
-        # If API is not available, use rule-based responses
-        try:
-            # Check for database query patterns
-            lower_input = user_input.lower()
+    # Always use rule-based responses since we have quota issues
+    return generate_response_rule_based(user_input)
+
+def generate_response_rule_based(user_input):
+    """Rule-based response generator with bilingual support"""
+    lower_input = user_input.lower()
+    
+    # Turkish greetings
+    turkish_greetings = ['selam', 'merhaba', 'meraba', 'günaydın', 'iyi günler']
+    if any(word in lower_input for word in turkish_greetings):
+        return """Merhaba! Ben BeoxBot. Size şu konularda yardımcı olabilirim:
+1. PDF faturaların işlenmesi
+2. E-posta gönderimi
+3. Fatura verilerinin yönetimi
+
+Nasıl yardımcı olabilirim?"""
+    
+    # English greetings
+    english_greetings = ['hello', 'hi', 'hey', 'good morning', 'good day']
+    if any(word in lower_input for word in english_greetings):
+        return """Hello! I'm BeoxBot. I can help you with:
+1. Processing PDF invoices
+2. Sending emails
+3. Managing invoice data
+
+How can I assist you?"""
+    
+    try:
+        # Week processing
+        if any(keyword in lower_input for keyword in ['hafta', 'pdfleri', 'işle', 'gönder', 'week', 'process']):
+            # First, check if we have any PDFs to process
+            if not os.path.exists(PDF_SAMPLES_FOLDER):
+                return "PDF klasörü bulunamadı. Lütfen sistem yöneticinize başvurun."
             
-            # Process week-related file processing requests
-            if any(keyword in lower_input for keyword in ['hafta', 'pdfleri', 'işle', 'gönder']):
-                # Extract date information from the message
-                # This is a simple implementation - you might want to use a more sophisticated date parser
-                from datetime import datetime, timedelta
-                import re
-                
-                # Try to find date patterns in the message
-                today = datetime.now()
+            pdf_files = [f for f in os.listdir(PDF_SAMPLES_FOLDER) if f.endswith('.pdf')]
+            if not pdf_files:
+                return "İşlenecek PDF dosyası bulunamadı. Lütfen önce PDF_SAMPLES klasörüne dosyaları yükleyin."
+            
+            print(f"Found {len(pdf_files)} PDF files in samples folder: {pdf_files}")
+            
+            from datetime import datetime, timedelta
+            import re
+            
+            # Try to find date patterns in the message
+            today = datetime.now()
+            
+            # Check for specific month mentions
+            months_tr = {
+                'ocak': 1, 'şubat': 2, 'mart': 3, 'nisan': 4, 'mayıs': 5, 'haziran': 6,
+                'temmuz': 7, 'ağustos': 8, 'eylül': 9, 'ekim': 10, 'kasım': 11, 'aralık': 12
+            }
+            
+            week_start = None
+            week_end = None
+            
+            # Try to parse the date
+            for month_name, month_num in months_tr.items():
+                if month_name in lower_input:
+                    # Find any numbers in the text that could be days
+                    day_match = re.search(r'\d{1,2}', lower_input)
+                    if day_match:
+                        day = int(day_match.group())
+                        year = today.year  # Use current year
+                        try:
+                            week_start = datetime(year, month_num, day)
+                            week_end = week_start + timedelta(days=6)
+                            print(f"Parsed date range: {week_start.strftime('%Y-%m-%d')} to {week_end.strftime('%Y-%m-%d')}")
+                            break
+                        except ValueError:
+                            return "Geçersiz tarih. Lütfen geçerli bir tarih belirtin."
+            
+            if not week_start:  # No month found, check for other patterns
                 if 'bu hafta' in lower_input:
                     week_start = today - timedelta(days=today.weekday())
                     week_end = week_start + timedelta(days=6)
@@ -65,134 +122,104 @@ def generate_response(user_input):
                         week_start = datetime.strptime(dates[0], '%d/%m/%Y')
                         week_end = datetime.strptime(dates[1], '%d/%m/%Y')
                     else:
-                        return "Lütfen işlemek istediğiniz haftayı belirtin. Örnek: 'Bu hafta' veya '01/03/2024-07/03/2024'"
+                        return """Lütfen işlemek istediğiniz haftayı belirtin. Örnek:
+- 'Bu hafta'
+- 'Geçen hafta'
+- '2 Aralık haftası'
+- '01/03/2024-07/03/2024'"""
+            
+            print(f"Processing week: {week_start.strftime('%Y-%m-%d')} to {week_end.strftime('%Y-%m-%d')}")
+            
+            # Format dates for processing
+            week_range = f"{week_start.strftime('%Y-%m-%d')},{week_end.strftime('%Y-%m-%d')}"
+            
+            # Process the files
+            from flask import current_app
+            with current_app.test_client() as client:
+                print(f"Sending request to /manual-process with week_range: {week_range}")
+                response = client.post('/manual-process', data={'selected_week': week_range})
+                result = response.get_json()
+                print(f"Response from /manual-process: {result}")
                 
-                # Format dates for processing
-                week_range = f"{week_start.strftime('%Y-%m-%d')},{week_end.strftime('%Y-%m-%d')}"
+                if result.get('success'):
+                    message_parts = []
+                    if result.get('processed_files'):
+                        message_parts.append(f"{len(result['processed_files'])} PDF işlendi")
+                    if result.get('auto_emailed_files'):
+                        message_parts.append(f"{len(result['auto_emailed_files'])} PDF otomatik gönderildi")
+                    if result.get('skipped_files'):
+                        message_parts.append(f"{len(result['skipped_files'])} PDF atlandı")
+                    
+                    if not message_parts:
+                        return f"Belirtilen hafta ({week_start.strftime('%d %B %Y')} - {week_end.strftime('%d %B %Y')}) için işlenecek PDF bulunamadı."
+                    
+                    return ". ".join(message_parts) + "."
+                else:
+                    error_msg = result.get('error', 'Bilinmeyen hata')
+                    return f"İşlem sırasında bir hata oluştu: {error_msg}"
+            
+        # Email handling
+        elif any(keyword in lower_input for keyword in ['mail', 'e-posta', 'eposta', 'email']):
+            # Extract invoice number and email address
+            import re
+            invoice_match = re.search(r'\d+', user_input)
+            email_match = re.search(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', user_input)
+            
+            if invoice_match and email_match:
+                invoice_number = invoice_match.group()
+                email_address = email_match.group()
                 
-                # Process the files
+                # Get company name for this invoice
+                company_name = db_handler.get_company_name_by_invoice(invoice_number)
+                if not company_name:
+                    return "Bu fatura numarası için şirket bilgisi bulunamadı."
+                
+                # Send the email using Flask test client
                 from flask import current_app
                 with current_app.test_client() as client:
-                    response = client.post('/manual-process', data={'selected_week': week_range})
-                    result = response.get_json()
+                    response = client.post('/send-email', data={
+                        'invoice_number': invoice_number,
+                        'email_address': email_address
+                    })
                     
-                    if result['success']:
-                        message_parts = []
-                        if result.get('processed_files'):
-                            message_parts.append(f"{len(result['processed_files'])} PDF işlendi")
-                        if result.get('auto_emailed_files'):
-                            message_parts.append(f"{len(result['auto_emailed_files'])} PDF otomatik gönderildi")
-                        if result.get('skipped_files'):
-                            message_parts.append(f"{len(result['skipped_files'])} PDF atlandı")
-                        
-                        return ". ".join(message_parts) + "."
+                    if 'success' in response.get_data(as_text=True):
+                        return f"Email {email_address} adresine başarıyla gönderildi."
                     else:
-                        return f"İşlem sırasında bir hata oluştu: {result.get('error', 'Bilinmeyen hata')}"
+                        return "Email gönderimi sırasında bir hata oluştu. Lütfen tekrar deneyin."
+            else:
+                return "Lütfen fatura numarası ve email adresini belirtin."
+        
+        # Database queries
+        elif any(keyword in lower_input for keyword in ['borç', 'ödeme', 'tarih', 'debt', 'payment', 'date']):
+            # Extract company name or invoice number
+            import re
+            invoice_match = re.search(r'\d+', user_input)
+            if invoice_match:
+                invoice_number = invoice_match.group()
+                request_info = db_handler.get_request_by_invoice(invoice_number)
+                if request_info:
+                    return f"Fatura #{invoice_number}:\nŞirket: {request_info['company_name']}\nBaşlangıç: {request_info['period_start']}\nBitiş: {request_info['period_end']}"
             
-            # Handle email sending requests
-            elif 'mail' in lower_input and any(char.isdigit() for char in user_input):
-                # Extract invoice number and email address
-                import re
-                invoice_match = re.search(r'\d+', user_input)
-                email_match = re.search(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', user_input)
-                
-                if invoice_match and email_match:
-                    invoice_number = invoice_match.group()
-                    email_address = email_match.group()
-                    
-                    # Get company name for this invoice
-                    company_name = db_handler.get_company_name_by_invoice(invoice_number)
-                    if not company_name:
-                        return "Bu fatura numarası için şirket bilgisi bulunamadı."
-                    
-                    # Send the email using the existing endpoint
-                    from flask import current_app
-                    with current_app.test_client() as client:
-                        response = client.post('/send-email', data={
-                            'invoice_number': invoice_number,
-                            'email_address': email_address
-                        })
-                        
-                        # Check if email was sent successfully
-                        if 'success' in response.get_data(as_text=True):
-                            # Store the email association
-                            db_handler.add_company_email(company_name, email_address)
-                            return f"Email {email_address} adresine başarıyla gönderildi. Bu email adresi {company_name} şirketi için kaydedildi."
-                        else:
-                            return "Email gönderimi sırasında bir hata oluştu. Lütfen tekrar deneyin."
-                else:
-                    return "Fatura numarası veya email adresi bulunamadı. Lütfen tekrar deneyin."
-            
-            # Handle database queries
-            elif any(keyword in lower_input for keyword in ['borç', 'ödeme', 'tarih']):
-                # Extract company name or invoice number
-                company_name = None
-                invoice_number = None
-                
-                # Try to find invoice number
-                import re
-                invoice_match = re.search(r'\d+', user_input)
-                if invoice_match:
-                    invoice_number = invoice_match.group()
-                
-                # If no invoice number, try to find company name
-                if not invoice_number:
-                    # This is a simple implementation - you might want to use more sophisticated NLP
-                    words = user_input.split()
-                    for i, word in enumerate(words):
-                        if word.lower() in ['şirket', 'firma', 'kurum']:
-                            if i > 0:
-                                company_name = words[i-1]
-                                break
-                
-                if company_name or invoice_number:
-                    # Query the database
-                    if invoice_number:
-                        request_info = db_handler.get_request_by_invoice(invoice_number)
-                        if request_info:
-                            return f"Fatura #{invoice_number}:\nŞirket: {request_info['company_name']}\nBaşlangıç: {request_info['period_start']}\nBitiş: {request_info['period_end']}"
-                    else:
-                        # Get company information
+            # Try to find company name
+            words = user_input.split()
+            for i, word in enumerate(words):
+                if word.lower() in ['şirket', 'firma', 'kurum', 'company']:
+                    if i > 0:
+                        company_name = words[i-1]
                         company_info = db_handler.get_company_info(company_name)
                         if company_info:
                             return f"{company_name} için bilgiler:\nSon işlem tarihi: {company_info['last_transaction_date']}\nToplam işlem: {company_info['total_transactions']}"
-                    
-                    return "Belirtilen şirket veya fatura numarası için bilgi bulunamadı."
-                else:
-                    return "Lütfen bir şirket adı veya fatura numarası belirtin."
             
-            return "Üzgünüm, ne yapmak istediğinizi anlayamadım. Lütfen daha açık bir şekilde belirtin."
+            return "Lütfen bir şirket adı veya fatura numarası belirtin."
             
-        except Exception as e:
-            print(f"Error processing request: {str(e)}")
-            return "İşlem sırasında bir hata oluştu. Lütfen tekrar deneyin."
-    else:
-        # Use DeepSeek API when available
-        try:
-            headers = {
-                "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-                "Content-Type": "application/json"
-            }
-            
-            payload = {
-                "messages": [{"role": "user", "content": user_input}],
-                "model": "deepseek-chat",
-                "temperature": 0.7,
-                "max_tokens": 256
-            }
-            
-            response = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload)
-            response.raise_for_status()
-            
-            result = response.json()
-            return result['choices'][0]['message']['content'].strip()
-            
-        except requests.exceptions.RequestException as e:
-            print(f"API request error: {str(e)}")
-            return "I apologize, but I encountered an error while processing your request. Please try again."
-        except Exception as e:
-            print(f"Error generating response: {str(e)}")
-            return "I apologize, but I encountered an error while processing your request. Please try again."
+    except Exception as e:
+        print(f"Rule-based processing error: {str(e)}")
+        return "İşlem sırasında bir hata oluştu. Lütfen tekrar deneyin."
+    
+    # Default responses
+    if any(word in lower_input for word in ['türkçe', 'turkce']):
+        return "Size fatura işleme, e-posta gönderimi veya veri yönetimi konularında nasıl yardımcı olabilirim?"
+    return "How can I help you with invoice processing, emails, or data management?"
 
 # Configuration
 PDF_SAMPLES_FOLDER = 'pdf_samples'
@@ -507,16 +534,22 @@ def send_email():
 
 @app.route('/chat', methods=['POST'])
 def chat():
-    data = request.get_json()
-    message = data.get('message', '')
-    
     try:
-        # Generate response using the model
+        message = request.json.get('message')
+        if not message:
+            return jsonify({'error': 'No message provided'}), 400
+
+        # Generate response using the existing generate_response function
         response = generate_response(message)
-        return jsonify({'response': response})
+        
+        return jsonify({
+            'response': response
+        })
     except Exception as e:
-        print(f"Error generating response: {str(e)}")
-        return jsonify({'response': 'I apologize, but I encountered an error. Please try again.'})
+        print(f"Error in chat endpoint: {str(e)}")
+        return jsonify({
+            'error': 'An error occurred while processing your message'
+        }), 500
 
 @app.route('/settings', methods=['GET', 'POST'])
 def settings():

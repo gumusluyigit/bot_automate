@@ -1,42 +1,261 @@
 {% extends "base.html" %}
 
-{% block title %}Home - Receipt Automation{% endblock %}
+{% block title %}BeoxBot - AI Assistant{% endblock %}
 
 {% block content %}
-<div class="container">
-    <h1 class="mb-4">Receipt Automation Dashboard</h1>
-    
-    <div class="row">
-        <div class="col-md-12">
-            <div class="card">
-                <div class="card-header">
-                    <h5 class="card-title mb-0">Recent Pending Requests</h5>
-                </div>
-                <div class="card-body">
-                    {% if recent_requests %}
-                        <div class="list-group">
-                            {% for request in recent_requests %}
-                            <div class="list-group-item">
-                                <div class="d-flex w-100 justify-content-between">
-                                    <h6 class="mb-1">{{ request.company_name }}</h6>
-                                    <small class="text-muted">{{ request.date }}</small>
-                                </div>
-                                <p class="mb-1">Invoice #{{ request.invoice_number }}</p>
-                            </div>
-                            {% endfor %}
-                        </div>
-                    {% else %}
-                        <p class="text-muted">No pending requests found.</p>
-                    {% endif %}
+<div class="chat-interface">
+    <div class="chat-container">
+        <div id="chat-messages" class="messages-container">
+            <div class="message bot-message">
+                <div class="message-content">
+                    <p>Hello! I'm BeoxBot. I can help you with:</p>
+                    <ul>
+                        <li>Processing PDF invoices</li>
+                        <li>Sending emails</li>
+                        <li>Managing invoice data</li>
+                        <li>Answering questions about the system</li>
+                    </ul>
+                    <p>How can I assist you today?</p>
                 </div>
             </div>
+        </div>
+        <div class="input-container">
+            <form id="chat-form" class="message-form">
+                <div class="input-wrapper">
+                    <textarea 
+                        id="user-input" 
+                        rows="1" 
+                        placeholder="Message BeoxBot..."
+                        class="message-input"
+                    ></textarea>
+                    <button type="submit" class="send-button">
+                        <i class="bi bi-send-fill"></i>
+                    </button>
+                </div>
+            </form>
         </div>
     </div>
 </div>
 {% endblock %}
 
+{% block styles %}
+<style>
+    .chat-interface {
+        max-width: 1000px;
+        margin: 0 auto;
+        height: calc(100vh - 150px);
+        display: flex;
+        flex-direction: column;
+    }
+
+    .chat-container {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        background: white;
+        border-radius: 8px;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+        margin: 20px;
+        position: relative;
+        height: 100%;
+    }
+
+    .messages-container {
+        flex: 1;
+        overflow-y: auto;
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+        margin-bottom: 90px; /* Add space for input container */
+    }
+
+    .input-container {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        padding: 20px;
+        background: white;
+        border-top: 1px solid #e5e5e5;
+        border-radius: 0 0 8px 8px;
+    }
+
+    .message {
+        display: flex;
+        max-width: 90%;
+        margin: 0;
+        padding: 0;
+    }
+
+    .bot-message {
+        margin-right: auto;
+    }
+
+    .user-message {
+        margin-left: auto;
+        flex-direction: row-reverse;
+    }
+
+    .message-content {
+        padding: 15px;
+        border-radius: 12px;
+        background: #f7f7f8;
+    }
+
+    .user-message .message-content {
+        background: #0d6efd;
+        color: white;
+    }
+
+    .message-form {
+        max-width: 900px;
+        margin: 0 auto;
+    }
+
+    .input-wrapper {
+        display: flex;
+        align-items: flex-end;
+        background: white;
+        border: 1px solid #e5e5e5;
+        border-radius: 8px;
+        padding: 8px 12px;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
+    }
+
+    .message-input {
+        flex: 1;
+        border: none;
+        outline: none;
+        padding: 8px;
+        resize: none;
+        max-height: 200px;
+        font-size: 16px;
+    }
+
+    .send-button {
+        background: none;
+        border: none;
+        color: #0d6efd;
+        padding: 8px;
+        cursor: pointer;
+        transition: color 0.2s;
+    }
+
+    .send-button:hover {
+        color: #0b5ed7;
+    }
+
+    /* Style for the bot's message lists */
+    .bot-message ul {
+        margin: 10px 0;
+        padding-left: 20px;
+    }
+
+    .bot-message li {
+        margin: 5px 0;
+    }
+</style>
+{% endblock %}
+
 {% block scripts %}
 <script>
-    // Add any dashboard-specific JavaScript here
+    const chatForm = document.getElementById('chat-form');
+    const userInput = document.getElementById('user-input');
+    const messagesContainer = document.getElementById('chat-messages');
+
+    // Auto-resize textarea as user types
+    userInput.addEventListener('input', function() {
+        this.style.height = 'auto';
+        this.style.height = (this.scrollHeight) + 'px';
+    });
+
+    // Handle Enter key
+    userInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault(); // Prevent default newline
+            sendMessage();
+        }
+    });
+
+    // Handle form submission
+    chatForm.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        sendMessage();
+    });
+
+    async function sendMessage() {
+        const message = userInput.value.trim();
+        if (!message) return;
+
+        // Add user message to chat
+        addMessage(message, true);
+        
+        // Clear input and reset height
+        userInput.value = '';
+        userInput.style.height = 'auto';
+
+        // Show typing indicator
+        showTypingIndicator();
+
+        try {
+            // Send message to server
+            const response = await fetch('/chat', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ message: message })
+            });
+
+            const data = await response.json();
+            
+            // Hide typing indicator
+            hideTypingIndicator();
+
+            // Add bot response to chat
+            addMessage(data.response, false);
+            
+        } catch (error) {
+            console.error('Error:', error);
+            hideTypingIndicator();
+            addMessage('Sorry, I encountered an error. Please try again.', false);
+        }
+    }
+
+    function addMessage(text, isUser) {
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `message ${isUser ? 'user-message' : 'bot-message'}`;
+        
+        const contentDiv = document.createElement('div');
+        contentDiv.className = 'message-content';
+        contentDiv.textContent = text;
+        
+        messageDiv.appendChild(contentDiv);
+        messagesContainer.appendChild(messageDiv);
+        
+        // Scroll to bottom
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+
+    function showTypingIndicator() {
+        const indicator = document.createElement('div');
+        indicator.id = 'typing-indicator';
+        indicator.className = 'message bot-message';
+        indicator.innerHTML = `
+            <div class="message-content">
+                BeoxBot is typing<span class="dots"><span>.</span><span>.</span><span>.</span></span>
+            </div>
+        `;
+        messagesContainer.appendChild(indicator);
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+
+    function hideTypingIndicator() {
+        const indicator = document.getElementById('typing-indicator');
+        if (indicator) {
+            indicator.remove();
+        }
+    }
 </script>
 {% endblock %} 

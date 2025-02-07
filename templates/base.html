@@ -8,171 +8,31 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <style>
-        #chatbot-container {
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-            width: 550px;
-            z-index: 1000;
-            display: none;
-        }
-        
-        #chat-messages {
-            height: 400px;
-            overflow-y: auto;
-            padding: 10px;
-        }
-        
-        .chat-toggle {
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-            z-index: 1000;
-            width: 60px;
-            height: 60px;
-            border-radius: 30px;
-            background-color: #0d6efd;
-            color: white;
-            border: none;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
-        }
-        
-        .message {
-            margin-bottom: 10px;
-            padding: 8px 12px;
-            border-radius: 15px;
-            max-width: 80%;
-        }
-        
-        .user-message {
-            background-color: #e9ecef;
-            margin-left: auto;
-        }
-        
-        .bot-message {
-            background-color: #0d6efd;
-            color: white;
-            margin-right: auto;
+        /* Global spacing styles */
+        .main-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
         }
 
-        .typing-indicator {
-            display: none;
-            color: #6c757d;
-            font-size: 0.9em;
-            padding: 8px;
-            margin-bottom: 10px;
-        }
-
-        .typing-indicator .dots {
-            display: inline-block;
-        }
-
-        .typing-indicator .dots span {
-            display: inline-block;
-            width: 4px;
-            height: 4px;
-            border-radius: 50%;
-            background-color: #6c757d;
-            margin: 0 2px;
-            animation: bounce 1.4s infinite ease-in-out;
-        }
-
-        .typing-indicator .dots span:nth-child(2) {
-            animation-delay: 0.2s;
-        }
-
-        .typing-indicator .dots span:nth-child(3) {
-            animation-delay: 0.4s;
-        }
-
-        @keyframes bounce {
-            0%, 80%, 100% { transform: translateY(0); }
-            40% { transform: translateY(-4px); }
-        }
-
-        /* Chat container styles */
-        #chat-container {
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-            width: 350px;
-            height: 500px;
-            background: white;
-            border-radius: 10px;
-            box-shadow: 0 0 10px rgba(0,0,0,0.1);
-            display: flex;
-            flex-direction: column;
-            z-index: 1000;
-        }
-        
-        #chat-header {
-            padding: 15px;
-            background: #007bff;
-            color: white;
-            border-radius: 10px 10px 0 0;
-            cursor: pointer;
-        }
-        
-        #chat-messages {
-            flex-grow: 1;
-            overflow-y: auto;
-            padding: 15px;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-        
-        #chat-input {
-            padding: 15px;
-            border-top: 1px solid #eee;
-            display: flex;
-            gap: 10px;
-        }
-        
-        #message-input {
-            flex-grow: 1;
-            padding: 8px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            outline: none;
-        }
-        
-        .message {
-            max-width: 80%;
-            padding: 10px;
-            border-radius: 10px;
-            margin-bottom: 5px;
-        }
-        
-        .user-message {
-            background: #007bff;
-            color: white;
-            align-self: flex-end;
-        }
-        
-        .bot-message {
-            background: #f1f1f1;
-            color: black;
-            align-self: flex-start;
-        }
-        
-        .message-text {
-            word-wrap: break-word;
+        /* Ensure chat interface takes precedence on home page */
+        .chat-interface {
+            max-width: 1000px !important;
+            margin: 0 auto !important;
+            padding: 0 !important;
         }
     </style>
+    {% block styles %}{% endblock %}
 </head>
 <body>
     <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
         <div class="container">
-            <a class="navbar-brand" href="{{ url_for('index') }}">Receipt Automation</a>
+            <a class="navbar-brand" href="{{ url_for('index') }}">BeoxBot</a>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
                 <span class="navbar-toggler-icon"></span>
             </button>
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav">
-                    <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('index') }}">Dashboard</a>
-                    </li>
                     <li class="nav-item">
                         <a class="nav-link" href="{{ url_for('manual_process') }}">Manual Processing</a>
                     </li>
@@ -191,7 +51,7 @@
         </div>
     </nav>
 
-    <div class="container mt-4">
+    <div class="main-content">
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
                 {% for category, message in messages %}
@@ -206,129 +66,8 @@
         {% block content %}{% endblock %}
     </div>
 
-    <!-- Chatbot Interface -->
-    <button class="chat-toggle" onclick="toggleChat()">
-        <i class="bi bi-chat-dots-fill"></i>
-    </button>
-
-    <div id="chatbot-container" class="card">
-        <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
-            <span>BeoxBot</span>
-            <button type="button" class="btn-close btn-close-white" onclick="toggleChat()"></button>
-        </div>
-        <div id="chat-messages" class="card-body bg-light">
-            <div class="bot-message message">
-                Hello! How can I help you today?
-            </div>
-            <div id="typing-indicator" class="typing-indicator">
-                BeoxBot is typing<span class="dots"><span></span><span></span><span></span></span>
-            </div>
-        </div>
-        <div class="card-footer">
-            <form id="chat-form" class="d-flex" data-no-loading-state="true">
-                <input type="text" class="form-control me-2" id="user-input" placeholder="Type your message..." autocomplete="off">
-                <button type="submit" class="btn btn-primary">
-                    <i class="bi bi-send"></i>
-                </button>
-            </form>
-        </div>
-    </div>
-
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
-    <script>
-        let chatVisible = false;
-        
-        function toggleChat() {
-            const container = document.getElementById('chatbot-container');
-            chatVisible = !chatVisible;
-            container.style.display = chatVisible ? 'block' : 'none';
-        }
-
-        // Handle chat form submission
-        document.getElementById('chat-form').addEventListener('submit', async function(e) {
-            e.preventDefault();
-            const input = document.getElementById('user-input');
-            const message = input.value.trim();
-            if (!message) return;
-
-            // Clear input
-            input.value = '';
-
-            // Add user message
-            addMessage(message, true);
-
-            // Show typing indicator
-            document.getElementById('typing-indicator').style.display = 'block';
-
-            try {
-                // Send message to server
-                const response = await fetch('/chat', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ message })
-                });
-
-                const data = await response.json();
-
-                // Hide typing indicator
-                document.getElementById('typing-indicator').style.display = 'none';
-
-                // Add bot response
-                addMessage(data.response, false);
-            } catch (error) {
-                console.error('Error:', error);
-                document.getElementById('typing-indicator').style.display = 'none';
-                addMessage('Sorry, there was an error processing your message.', false);
-            }
-        });
-
-        function addMessage(text, isUser) {
-            const messages = document.getElementById('chat-messages');
-            const messageDiv = document.createElement('div');
-            messageDiv.className = `message ${isUser ? 'user-message' : 'bot-message'}`;
-            messageDiv.textContent = text;
-            messages.appendChild(messageDiv);
-            messages.scrollTop = messages.scrollHeight;
-
-            // Save to sessionStorage
-            const history = loadChatHistory();
-            history.push({ text, isUser });
-            sessionStorage.setItem('chatHistory', JSON.stringify(history));
-        }
-
-        function loadChatHistory() {
-            const savedHistory = sessionStorage.getItem('chatHistory');
-            return savedHistory ? JSON.parse(savedHistory) : [];
-        }
-
-        function displayChatHistory() {
-            const messages = document.getElementById('chat-messages');
-            const history = loadChatHistory();
-            
-            // Keep only the welcome message
-            messages.innerHTML = `
-                <div class="bot-message message">
-                    Hello! How can I help you today?
-                </div>
-            `;
-            
-            // Add messages from history
-            history.forEach(msg => {
-                const messageDiv = document.createElement('div');
-                messageDiv.className = `message ${msg.isUser ? 'user-message' : 'bot-message'}`;
-                messageDiv.textContent = msg.text;
-                messages.appendChild(messageDiv);
-            });
-            
-            messages.scrollTop = messages.scrollHeight;
-        }
-
-        // Load chat history when page loads
-        document.addEventListener('DOMContentLoaded', displayChatHistory);
-    </script>
     {% block scripts %}{% endblock %}
 </body>
 </html> 

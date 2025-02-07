@@ -3,58 +3,60 @@
 {% block title %}Pending Requests - Receipt Automation{% endblock %}
 
 {% block content %}
-<h1 class="mb-4">Pending Requests</h1>
+<div class="container-fluid p-0">
+    <h1 class="mb-4">Pending Requests</h1>
 
-{% if requests %}
-<div class="card">
-    <div class="card-body">
-        <div class="table-responsive">
-            <table class="table table-striped">
-                <thead>
-                    <tr>
-                        <th>Invoice Number</th>
-                        <th>Company Name</th>
-                        <th>Period Start</th>
-                        <th>Period End</th>
-                        <th class="text-end">Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for request in requests %}
-                    <tr>
-                        <td>{{ request.invoice_number if request.invoice_number is defined else 'N/A' }}</td>
-                        <td>{{ request.company_name if request.company_name is defined else 'Unknown' }}</td>
-                        <td>{{ request.period_start if request.period_start is defined else 'N/A' }}</td>
-                        <td>{{ request.period_end if request.period_end is defined else 'N/A' }}</td>
-                        <td class="text-end">
-                            <button type="button" 
-                                    class="btn btn-primary btn-sm"
-                                    data-bs-toggle="modal"
-                                    data-bs-target="#emailModal"
-                                    data-invoice="{{ request.invoice_number if request.invoice_number is defined else 'N/A' }}"
-                                    data-company="{{ request.company_name if request.company_name is defined else 'Unknown' }}">
-                                <i class="bi bi-envelope"></i> Send Email
-                            </button>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+    {% if requests %}
+    <div class="card">
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>Invoice Number</th>
+                            <th>Company Name</th>
+                            <th>Period Start</th>
+                            <th>Period End</th>
+                            <th class="text-end">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for request in requests %}
+                        <tr>
+                            <td>{{ request.invoice_number if request.invoice_number is defined else 'N/A' }}</td>
+                            <td>{{ request.company_name if request.company_name is defined else 'Unknown' }}</td>
+                            <td>{{ request.period_start if request.period_start is defined else 'N/A' }}</td>
+                            <td>{{ request.period_end if request.period_end is defined else 'N/A' }}</td>
+                            <td class="text-end">
+                                <button type="button" 
+                                        class="btn btn-primary btn-sm"
+                                        data-bs-toggle="modal"
+                                        data-bs-target="#emailModal"
+                                        data-invoice="{{ request.invoice_number if request.invoice_number is defined else 'N/A' }}"
+                                        data-company="{{ request.company_name if request.company_name is defined else 'Unknown' }}">
+                                    <i class="bi bi-envelope"></i> Send Email
+                                </button>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
         </div>
     </div>
-</div>
-{% else %}
-<div class="card">
-    <div class="card-body text-center py-5">
-        <i class="bi bi-inbox display-1 text-muted mb-3"></i>
-        <h3 class="text-muted mb-3">No Pending Requests</h3>
-        <p class="mb-4">There are currently no requests waiting to be processed.</p>
-        <a href="{{ url_for('manual_process') }}" class="btn btn-primary">
-            <i class="bi bi-file-earmark-pdf me-2"></i>Go to Manual Processing
-        </a>
+    {% else %}
+    <div class="card">
+        <div class="card-body text-center py-5">
+            <i class="bi bi-inbox display-1 text-muted mb-3"></i>
+            <h3 class="text-muted mb-3">No Pending Requests</h3>
+            <p class="mb-4">There are currently no requests waiting to be processed.</p>
+            <a href="{{ url_for('manual_process') }}" class="btn btn-primary">
+                <i class="bi bi-file-earmark-pdf me-2"></i>Go to Manual Processing
+            </a>
+        </div>
     </div>
+    {% endif %}
 </div>
-{% endif %}
 
 <!-- Email Modal -->
 <div class="modal fade" id="emailModal" tabindex="-1">
