@@ -1,6 +1,11 @@
 import sqlite3
 from datetime import datetime
 import os
+from typing import Optional
+import logging
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 class DatabaseHandler:
     def __init__(self, db_path="pending_requests.db"):
@@ -51,6 +56,28 @@ class DatabaseHandler:
                     company_name TEXT UNIQUE NOT NULL,
                     email TEXT NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            # Create chat_history table
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS chat_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    topic TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            # Create chat_messages table
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS chat_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (chat_id) REFERENCES chat_history(id)
                 )
             ''')
             
@@ -161,8 +188,7 @@ class DatabaseHandler:
                 cursor.execute('''
                     SELECT invoice_number, company_name, pdf_path, period_start, period_end, request_time
                     FROM pending_requests
-                    WHERE status = 'pending' 
-                    AND (sent_to IS NULL OR sent_at IS NULL)
+                    WHERE status = 'pending'
                     AND invoice_number NOT IN (
                         SELECT invoice_number 
                         FROM sent_emails 
@@ -171,9 +197,11 @@ class DatabaseHandler:
                     ORDER BY request_time DESC
                 ''')
                 columns = ['invoice_number', 'company_name', 'pdf_path', 'period_start', 'period_end', 'created_at']
-                return [dict(zip(columns, row)) for row in cursor.fetchall()]
+                results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+                logger.info(f"Found {len(results)} pending requests")
+                return results
         except sqlite3.Error as e:
-            print(f"Error getting pending requests: {e}")
+            logger.error(f"Error getting pending requests: {e}")
             return []
             
     def update_email(self, invoice_number, email):
@@ -348,13 +376,33 @@ class DatabaseHandler:
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
+                print(f"Looking up company name for invoice: {invoice_number}")  # Debug print
+                
+                # First check pending_requests
                 cursor.execute('''
                     SELECT company_name
                     FROM pending_requests
                     WHERE invoice_number = ?
                 ''', (invoice_number,))
                 result = cursor.fetchone()
-                return result[0] if result else None
+                if result:
+                    print(f"Found company name in pending_requests: {result[0]}")  # Debug print
+                    return result[0]
+                
+                # If not found, check invoice_details
+                cursor.execute('''
+                    SELECT company_name
+                    FROM invoice_details
+                    WHERE invoice_number = ?
+                ''', (invoice_number,))
+                result = cursor.fetchone()
+                if result:
+                    print(f"Found company name in invoice_details: {result[0]}")  # Debug print
+                    return result[0]
+                
+                print(f"No company name found for invoice: {invoice_number}")  # Debug print
+                return None
+                
         except sqlite3.Error as e:
             print(f"Error getting company name: {e}")
             return None
@@ -459,4 +507,164 @@ class DatabaseHandler:
                 ]
         except sqlite3.Error as e:
             print(f"Error getting all companies: {e}")
-            return [] 
+            return []
+
+    def get_company_invoices(self, company_name):
+        """Get all invoices for a company"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                # First check pending_requests table
+                cursor.execute('''
+                    SELECT invoice_number, company_name, pdf_path, period_start, period_end
+                    FROM pending_requests
+                    WHERE company_name LIKE ?
+                    AND status = 'pending'
+                    ORDER BY period_start DESC
+                ''', (f'%{company_name}%',))
+                
+                columns = ['invoice_number', 'company_name', 'pdf_path', 'period_start', 'period_end']
+                results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+                
+                # Then check invoice_details table
+                cursor.execute('''
+                    SELECT invoice_number, company_name, pdf_path, period_start, period_end
+                    FROM invoice_details
+                    WHERE company_name LIKE ?
+                    ORDER BY period_start DESC
+                ''', (f'%{company_name}%',))
+                
+                results.extend([dict(zip(columns, row)) for row in cursor.fetchall()])
+                
+                # Remove duplicates based on invoice_number
+                seen = set()
+                unique_results = []
+                for result in results:
+                    if result['invoice_number'] not in seen:
+                        seen.add(result['invoice_number'])
+                        unique_results.append(result)
+                
+                return unique_results
+                
+        except sqlite3.Error as e:
+            print(f"Error getting company invoices: {e}")
+            return []
+
+    def create_chat_session(self, session_id: str, topic: str = None) -> int:
+        """Create a new chat session and return its ID"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO chat_history (session_id, topic)
+                    VALUES (?, ?)
+                ''', (session_id, topic))
+                conn.commit()
+                return cursor.lastrowid
+        except sqlite3.Error as e:
+            logger.error(f"Error creating chat session: {e}")
+            return None
+
+    def add_chat_message(self, chat_id: int, role: str, content: str) -> bool:
+        """Add a message to an existing chat session"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO chat_messages (chat_id, role, content)
+                    VALUES (?, ?, ?)
+                ''', (chat_id, role, content))
+                conn.commit()
+                return True
+        except sqlite3.Error as e:
+            logger.error(f"Error adding chat message: {e}")
+            return False
+
+    def get_chat_history(self, limit: int = 10) -> list:
+        """Get recent chat sessions with their topics"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT 
+                        ch.id,
+                        ch.session_id,
+                        ch.topic,
+                        ch.created_at,
+                        COUNT(cm.id) as message_count,
+                        MAX(cm.timestamp) as last_activity
+                    FROM chat_history ch
+                    LEFT JOIN chat_messages cm ON ch.id = cm.chat_id
+                    GROUP BY ch.id
+                    ORDER BY last_activity DESC
+                    LIMIT ?
+                ''', (limit,))
+                return [dict(zip(['id', 'session_id', 'topic', 'created_at', 'message_count', 'last_activity'], row))
+                        for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            logger.error(f"Error getting chat history: {e}")
+            return []
+
+    def get_chat_messages(self, chat_id: int) -> list:
+        """Get all messages for a specific chat session"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT role, content, timestamp
+                    FROM chat_messages
+                    WHERE chat_id = ?
+                    ORDER BY timestamp ASC
+                ''', (chat_id,))
+                return [dict(zip(['role', 'content', 'timestamp'], row))
+                        for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            logger.error(f"Error getting chat messages: {e}")
+            return []
+
+    def update_chat_topic(self, chat_id: int, topic: str) -> bool:
+        """Update the topic of a chat session"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE chat_history
+                    SET topic = ?
+                    WHERE id = ?
+                ''', (topic, chat_id))
+                conn.commit()
+                return True
+        except sqlite3.Error as e:
+            logger.error(f"Error updating chat topic: {e}")
+            return False
+
+    def get_chat_topic(self, chat_id: int) -> Optional[str]:
+        """Get the topic of a chat session"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT topic
+                    FROM chat_history
+                    WHERE id = ?
+                ''', (chat_id,))
+                result = cursor.fetchone()
+                return result[0] if result else None
+        except sqlite3.Error as e:
+            logger.error(f"Error getting chat topic: {e}")
+            return None
+
+    def delete_chat(self, chat_id: int) -> bool:
+        """Delete a chat session and all its messages"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                # Delete all messages first due to foreign key constraint
+                cursor.execute('DELETE FROM chat_messages WHERE chat_id = ?', (chat_id,))
+                # Then delete the chat history entry
+                cursor.execute('DELETE FROM chat_history WHERE id = ?', (chat_id,))
+                conn.commit()
+                return True
+        except sqlite3.Error as e:
+            logger.error(f"Error deleting chat: {e}")
+            return False 
