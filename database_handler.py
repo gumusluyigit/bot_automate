@@ -1,7 +1,7 @@
 import sqlite3
 from datetime import datetime
 import os
-from typing import Optional
+from typing import Optional, Dict, Any
 import logging
 
 # Configure logging
@@ -112,6 +112,11 @@ class DatabaseHandler:
                 cursor.execute('SELECT company_name FROM sent_emails LIMIT 1')
             except sqlite3.OperationalError:
                 cursor.execute('ALTER TABLE sent_emails ADD COLUMN company_name TEXT')
+            
+            # Create indexes for faster lookups
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_invoice_number ON pending_requests(invoice_number)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_company_name ON company_emails(company_name)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_sent_invoice ON sent_emails(invoice_number)')
             
             conn.commit()
             print(f"Database initialized at: {self.db_path}")
@@ -667,4 +672,34 @@ class DatabaseHandler:
                 return True
         except sqlite3.Error as e:
             logger.error(f"Error deleting chat: {e}")
-            return False 
+            return False
+
+    def get_request_by_company(self, company_name: str) -> Optional[Dict[str, Any]]:
+        """Get a pending request by company name"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT id, invoice_number, company_name, pdf_path, period_start, period_end, status, sent_to
+                    FROM pending_requests
+                    WHERE company_name LIKE ? AND status = 'pending'
+                    ORDER BY request_time DESC
+                    LIMIT 1
+                ''', (f'%{company_name}%',))
+                
+                result = cursor.fetchone()
+                if result:
+                    return {
+                        'id': result[0],
+                        'invoice_number': result[1],
+                        'company_name': result[2],
+                        'pdf_path': result[3],
+                        'period_start': result[4],
+                        'period_end': result[5],
+                        'status': result[6],
+                        'sent_to': result[7]
+                    }
+                return None
+        except sqlite3.Error as e:
+            logger.error(f"Error getting request by company: {e}")
+            return None 

@@ -187,6 +187,7 @@ document.addEventListener('DOMContentLoaded', function() {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
+                'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]').getAttribute('content')
             },
             body: `selected_week=${selectedWeek}`
         })

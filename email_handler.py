@@ -6,6 +6,26 @@ from datetime import datetime
 import sqlite3
 import os
 import json
+import time
+import functools
+
+def retry_on_failure(retries=3, delay=2):
+    """Retry decorator for handling temporary network issues"""
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            last_error = None
+            for attempt in range(retries):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_error = e
+                    if attempt < retries - 1:  # Don't sleep on the last attempt
+                        time.sleep(delay)
+            print(f"Failed after {retries} attempts. Last error: {last_error}")
+            return False
+        return wrapper
+    return decorator
 
 class EmailHandler:
     def __init__(self, sender_email=None, internal_email=None):
@@ -37,6 +57,7 @@ class EmailHandler:
             print(f"Authentication failed: {e}")
             return False
     
+    @retry_on_failure(retries=3, delay=2)
     def send_email(self, to_email, subject, body, attachments=None):
         """Send an email with optional attachments"""
         if not self.sender_email or not self._password:

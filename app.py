@@ -1,5 +1,6 @@
 from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for, flash
 from flask_cors import CORS  # Add CORS support for potential frontend integration
+from flask_wtf.csrf import CSRFProtect
 from pdf_processor import PDFProcessor
 from database_handler import DatabaseHandler
 from email_handler import EmailHandler
@@ -14,9 +15,13 @@ import requests
 import re
 import sqlite3
 import logging
+from logging.handlers import RotatingFileHandler
 from cachetools import TTLCache
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List, Union
 import uuid
+
+# Create logger instance
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
@@ -31,12 +36,34 @@ else:
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'your-secret-key-here')  # Required for flash messages
 
+# Initialize CSRF protection
+csrf = CSRFProtect(app)
+
+# Configure CSRF to check for X-CSRF-Token header
+@app.before_request
+def csrf_protect():
+    if request.method == "POST":
+        token = request.headers.get('X-CSRF-Token')
+        if token:
+            request.form = request.form.copy()
+            request.form['csrf_token'] = token
+
+# Configure logging with rotation
+log_file = 'automation.log'
+handler = RotatingFileHandler(log_file, maxBytes=1024*1024, backupCount=5)  # 1MB per file, keep 5 backup files
+handler.setFormatter(logging.Formatter(
+    '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+))
+app.logger.addHandler(handler)
+app.logger.setLevel(logging.INFO)
+
 # Enable CORS
 CORS(app, resources={
     r"/*": {
         "origins": "*",  # In production, replace with specific origins
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization"]
+        "allow_headers": ["Content-Type", "Authorization", "X-CSRF-Token"],
+        "supports_credentials": True
     }
 })
 
@@ -57,13 +84,6 @@ email_handler = EmailHandler(
 # If we have saved credentials, set them in the email handler
 if email_config['app_password']:
     email_handler.save_credentials(email_config['app_password'])
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
 
 # Initialize response cache (5 minutes TTL)
 response_cache = TTLCache(maxsize=100, ttl=300)
@@ -210,17 +230,11 @@ def generate_response(user_input: str) -> str:
             logger.info("Returning cached response")
             return response_cache[user_input]
 
-        # Check for PDF processing requests
-        lower_input = user_input.lower()
-        if any(word in lower_input for word in ['işle', 'process']):
-            return process_pdf_request(lower_input)
-        elif 'gönder' in lower_input or 'send' in lower_input:
-            return process_email_request(user_input, lower_input)
-        else:
-            return process_api_request(user_input)
+        # Process the request using OpenAI API
+        return process_api_request(user_input)
     except Exception as e:
         logger.error(f"Error in generate_response: {str(e)}")
-        return generate_response_rule_based(user_input)
+        return f"Sorry, there was an error processing your request: {str(e)}"
 
 def process_pdf_request(lower_input: str) -> str:
     """Process PDF-related requests"""
@@ -234,6 +248,12 @@ def process_pdf_request(lower_input: str) -> str:
             'may': 5, 'june': 6, 'july': 7, 'august': 8,
             'september': 9, 'october': 10, 'november': 11, 'december': 12
         }
+        
+        # Log the input and directory contents
+        logger.info(f"Processing PDF request with input: {lower_input}")
+        logger.info(f"PDF_SAMPLES_FOLDER path: {PDF_SAMPLES_FOLDER}")
+        logger.info(f"Directory exists: {os.path.exists(PDF_SAMPLES_FOLDER)}")
+        logger.info(f"Directory contents: {os.listdir(PDF_SAMPLES_FOLDER)}")
         
         words = lower_input.split()
         day = None
@@ -249,111 +269,142 @@ def process_pdf_request(lower_input: str) -> str:
         if not (day and month):
             return "Lütfen geçerli bir tarih belirtin (örnek: '6 ocak' veya '15 aralık')"
         
+        logger.info(f"Extracted date: day={day}, month={month}")
+        
         current_date = datetime.now()
         year = current_date.year
         
-        if month == 1 and current_date.month == 12:
-            year = current_date.year + 1
-        elif month == 12 and current_date.month == 1:
+        # Adjust year for December/January crossover
+        if month == 12 and current_date.month < 6:  # If requesting December and current month is in first half of year
             year = current_date.year - 1
+        elif month == 1 and current_date.month > 6:  # If requesting January and current month is in second half of year
+            year = current_date.year + 1
         
         target_date = datetime(year, month, day)
         week_start = target_date - timedelta(days=target_date.weekday())
         week_end = week_start + timedelta(days=6)
         
+        logger.info(f"Processing week: {week_start.strftime('%Y-%m-%d')} to {week_end.strftime('%Y-%m-%d')}")
+        
         processed_files, skipped_files = process_pdf_for_week(week_start, week_end)
         
-        response = f"{day} {month_name} haftasına ait PDFleri işledim.\n"
+        if not processed_files and not skipped_files:
+            pdf_files = [f for f in os.listdir(PDF_SAMPLES_FOLDER) if f.endswith('.pdf')]
+            logger.info(f"No files processed. Available PDF files: {pdf_files}")
+            
+            # Try to parse dates from filenames for debugging
+            for pdf_file in pdf_files:
+                try:
+                    date_match = re.search(r'_(\d{8})-(\d{8})\.pdf$', pdf_file)
+                    if date_match:
+                        file_start = datetime.strptime(date_match.group(1), '%Y%m%d')
+                        file_end = datetime.strptime(date_match.group(2), '%Y%m%d')
+                        logger.info(f"File {pdf_file} period: {file_start.strftime('%Y-%m-%d')} to {file_end.strftime('%Y-%m-%d')}")
+                        logger.info(f"Comparison with week: {file_start <= week_end} and {file_end >= week_start}")
+                except Exception as e:
+                    logger.error(f"Error parsing dates from filename {pdf_file}: {str(e)}")
+            
+        response = f"{day} {month_name} haftasına ait PDFleri işledim."
         
         if processed_files:
-            response += "\nİşlenen yeni faturalar:\n"
+            response += "\n\nİşlenen yeni faturalar:\n"
             for file in processed_files:
-                response += f"- Fatura No: {file.get('invoice_number', 'N/A')} ({file['period_start']} - {file['period_end']})\n"
+                response += f"- Fatura No: {file.get('invoice_number', 'N/A')} ({file['period_start']} - {file['period_end']})"
         
         if skipped_files:
             response += "\nDaha önce işlenmiş faturalar (atlandı):\n"
             for file in skipped_files:
                 status = "İşlenmiş" if file['status'] == 'Processed' else "Beklemede"
-                response += f"- Fatura No: {file['invoice_number']} ({file['period_start']} - {file['period_end']}) - {status}\n"
+                response += f"- Fatura No: {file['invoice_number']} ({file['period_start']} - {file['period_end']}) - {status}"
         
         if not processed_files and not skipped_files:
-            return f"{day} {month_name} haftası için işlenecek PDF fatura bulamadım. Lütfen PDF_SAMPLES klasörünü kontrol edin."
-        
-        # Add email request information if there are new processed files
-        if processed_files:
-            invoices_without_email = []
-            for file in processed_files:
-                if not db_handler.get_company_email(file['company_name']):
-                    invoices_without_email.append(file['invoice_number'])
-            
-            if invoices_without_email:
-                response += "\nAşağıdaki fatura numaraları için e-posta adresleri eksik:\n"
-                for invoice_number in invoices_without_email:
-                    response += f"- {invoice_number}\n"
-                response += "\nLütfen her fatura için e-posta adresini belirtin. Örnek:\n"
-                response += f"'{invoices_without_email[0]} numaralı fatura için mail adresi: example@company.com'"
-            else:
-                response += "\nTüm yeni faturalar için e-posta adresleri mevcut. Faturalar otomatik olarak gönderilecek."
+            return f"{day} {month_name} haftası için işlenecek PDF fatura bulamadım. PDF_SAMPLES klasöründe {len(pdf_files)} adet PDF dosyası var."
         
         return response
             
     except Exception as e:
         logger.error(f"Error processing PDFs: {e}")
-        return "PDF işleme sırasında bir hata oluştu. Lütfen daha sonra tekrar deneyin."
+        return f"PDF işleme sırasında bir hata oluştu: {str(e)}"
 
 def process_email_request(user_input: str, lower_input: str) -> str:
     """Process email-related requests"""
     try:
-        # Check for invoice-specific email assignment
-        invoice_match = re.search(r'(\d+)(?:\s+numaral[ıi])?(?:\s+fatura)?(?:\s+için)?\s+(?:mail|email|e-posta)?\s+(?:adres(?:i)?|address)?:?\s*([\w\.-]+@[\w\.-]+\.\w+)', user_input, re.IGNORECASE)
-        if invoice_match:
-            invoice_number = invoice_match.group(1)
-            email_address = invoice_match.group(2)
-            
-            logger.info(f"Processing email assignment for invoice: {invoice_number}, email: {email_address}")
-            
-            # Get request info
-            request_info = db_handler.get_request_by_invoice(invoice_number)
-            if not request_info:
-                return f"{invoice_number} numaralı fatura bulunamadı."
-            
-            company_name = request_info['company_name']
-            
-            # Save email association
-            db_handler.add_company_email(company_name, email_address)
-            
-            try:
-                logger.info(f"Attempting to send email for invoice {invoice_number}")
+        # First check if email configuration is set up
+        if not email_handler.sender_email or not email_handler._password:
+            return "E-posta ayarları yapılandırılmamış. Lütfen önce ayarları kontrol edin."
+
+        # Check for invoice-specific email assignment patterns
+        patterns = [
+            # Pattern 1: "x numaralı faturayı y@test.com adresine gönder"
+            r'(\d+)\s+(?:numaral[ıi])?\s*(?:fatura(?:y[ıi])?)?(?:\s+için)?\s*(?:mail|email|e-posta)?\s*(?:adres(?:i)?|address)?:?\s*([\w\.-]+@[\w\.-]+\.\w+)(?:\s+(?:adres(?:i)?|address)?)?(?:\s+(?:gönder|yolla|at))?',
+            # Pattern 2: "x numaralı faturayı y@test.com a gönder"
+            r'(\d+)\s+(?:numaral[ıi])?\s*(?:fatura(?:y[ıi])?)?(?:\s+için)?\s*([\w\.-]+@[\w\.-]+\.\w+)(?:\s+(?:adres(?:i)?ne|a|e))?\s+(?:gönder|yolla|at)',
+            # Pattern 3: "x isimli şirketin faturasını z@test.com a yolla"
+            r'([A-Za-zçğıöşüÇĞİÖŞÜ\s]+)(?:\s+(?:isimli|adl[ıi]|ad[ıi]ndaki))?\s+(?:şirket(?:in)?|firma(?:n[ıi]n)?)?\s+fatura(?:s[ıi]n[ıi])?(?:\s+için)?\s+([\w\.-]+@[\w\.-]+\.\w+)',
+            # Pattern 4: "send invoice x to y@test.com"
+            r'(?:send|forward)\s+(?:invoice)?\s*(?:number)?\s*(?:#)?\s*(\d+)\s+(?:to|for)?\s*([\w\.-]+@[\w\.-]+\.\w+)',
+            # Pattern 5: "send company x's invoice to y@test.com"
+            r'(?:send|forward)\s+(?:the)?\s*([A-Za-z\s]+)(?:\'s)?\s+invoice\s+(?:to|for)?\s*([\w\.-]+@[\w\.-]+\.\w+)'
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, user_input, re.IGNORECASE)
+            if match:
+                identifier, email_address = match.groups()
+                logger.info(f"Matched pattern with identifier: {identifier} and email: {email_address}")
+                
+                # Check if identifier is a number (invoice number) or text (company name)
+                if identifier.isdigit():
+                    request_info = db_handler.get_request_by_invoice(identifier)
+                    logger.info(f"Looking up invoice number: {identifier}")
+                else:
+                    # Clean up company name and try to find matching request
+                    company_name = identifier.strip()
+                    request_info = db_handler.get_request_by_company(company_name)
+                    logger.info(f"Looking up company name: {company_name}")
+                
+                if not request_info:
+                    logger.error(f"No request found for identifier: {identifier}")
+                    return f"{'Fatura' if 'türkçe' in lower_input else 'Invoice'} bulunamadı."
+                
+                company_name = request_info['company_name']
+                invoice_number = request_info['invoice_number']
                 
                 # Check if PDF file exists
                 if not os.path.exists(request_info['pdf_path']):
                     logger.error(f"PDF file not found: {request_info['pdf_path']}")
-                    return f"{invoice_number} numaralı faturanın PDF dosyası bulunamadı."
-                    
-                success = email_handler.send_email(
-                    to_email=email_address,
-                    subject=f"Invoice {invoice_number} for {company_name}",
-                    body=f"Please find attached the invoice {invoice_number} for the period {request_info['period_start']} to {request_info['period_end']}.",
-                    attachment_path=request_info['pdf_path']
-                )
+                    return f"PDF dosyası bulunamadı: {invoice_number}"
                 
-                if success:
-                    logger.info(f"Email sent successfully for invoice {invoice_number}")
-                    # Move file to processed folder
-                    processed_path = os.path.join(PROCESSED_FOLDER, os.path.basename(request_info['pdf_path']))
-                    shutil.move(request_info['pdf_path'], processed_path)
-                    # Mark as sent in database
-                    db_handler.mark_as_sent(invoice_number, email_address)
-                    return f"{invoice_number} numaralı fatura {email_address} adresine gönderildi ve işlendi."
-                else:
-                    logger.error(f"Failed to send email for invoice {invoice_number}")
-                    return f"{invoice_number} numaralı fatura için e-posta gönderilemedi. Lütfen e-posta ayarlarını kontrol edin."
+                try:
+                    logger.info(f"Attempting to send email for invoice {invoice_number} to {email_address}")
+                    # Send email
+                    success = email_handler.send_email(
+                        to_email=email_address,
+                        subject=f"Invoice {invoice_number} for {company_name}",
+                        body=f"Please find attached the invoice {invoice_number} for the period {request_info['period_start']} to {request_info['period_end']}.",
+                        attachments=[request_info['pdf_path']]
+                    )
                     
-            except Exception as e:
-                logger.error(f"Error sending email for invoice {invoice_number}: {str(e)}")
-                return f"{invoice_number} numaralı fatura gönderilirken hata oluştu: {str(e)}"
-            
-        # Handle general email requests (existing logic)
+                    if success:
+                        logger.info(f"Email sent successfully for invoice {invoice_number}")
+                        # Move file to processed folder
+                        processed_path = os.path.join(PROCESSED_FOLDER, os.path.basename(request_info['pdf_path']))
+                        shutil.move(request_info['pdf_path'], processed_path)
+                        
+                        # Save email association and mark as sent
+                        db_handler.add_company_email(company_name, email_address)
+                        db_handler.mark_as_sent(invoice_number, email_address)
+                        
+                        return f"{invoice_number} numaralı fatura {email_address} adresine gönderildi ve {company_name} için kayıt edildi."
+                    else:
+                        logger.error(f"Failed to send email for invoice {invoice_number}")
+                        return f"E-posta gönderimi başarısız oldu. Lütfen e-posta ayarlarını kontrol edin."
+                        
+                except Exception as e:
+                    logger.error(f"Error sending email: {str(e)}")
+                    return f"E-posta gönderilirken hata oluştu: {str(e)}"
+                
+        # If no specific patterns match, handle as a general email request
         email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', user_input)
         if not email_match:
             return "Lütfen geçerli bir e-posta adresi belirtin."
@@ -371,7 +422,7 @@ def process_email_request(user_input: str, lower_input: str) -> str:
                     to_email=email_address,
                     subject=f"Invoice {request['invoice_number']} for {request['company_name']}",
                     body=f"Please find attached the invoice {request['invoice_number']} for the period {request['period_start']} to {request['period_end']}.",
-                    attachment_path=request['pdf_path']
+                    attachments=[request['pdf_path']]
                 )
                 
                 if success:
@@ -396,15 +447,20 @@ def process_email_request(user_input: str, lower_input: str) -> str:
 def process_api_request(user_input: str) -> str:
     """Process API requests"""
     try:
+        # First check if it's an email sending request
+        lower_input = user_input.lower()
+        if any(word in lower_input for word in ['mail', 'email', 'e-posta', 'gönder', 'yolla', 'send']):
+            email_response = process_email_request(user_input, lower_input)
+            return email_response
+
         api_key = os.getenv('OPENAI_API_KEY')
-        if not validate_api_key(api_key):
-            logger.warning("Invalid or missing OpenAI API key")
-            return generate_response_rule_based(user_input)
-        
+        if not api_key:
+            raise ValueError("OpenAI API key not found in environment variables")
+
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
-            "OpenAI-Beta": "assistants=v1"
+            "Accept": "application/json"
         }
         
         system_content = """You are BeoxBot, an AI assistant for a PDF invoice automation system. The system has the following features:
@@ -419,19 +475,8 @@ def process_api_request(user_input: str) -> str:
    - Store company email associations for future use
    - Send notifications for missing email addresses
 
-3. Invoice Queries:
-   - Look up invoice details by number (e.g., "44075 numaralı şirketin borcu")
-   - Show company invoice history and total amounts
-   - Display invoice periods and due dates
-
-4. Database Operations:
-   - Track pending requests
-   - Store company information
-   - Maintain email history
-
-When users ask about processing a specific week's invoices, you should understand they want to use the manual processing feature. For queries about company debts or invoice amounts, you should look up the invoice details in the database.
-
-Please respond in the same language as the user's query (Turkish or English)."""
+Please respond in the same language as the user's query (Turkish or English).
+For PDF processing requests, call the appropriate function to process the PDFs."""
         
         data = {
             "model": "gpt-3.5-turbo",
@@ -440,35 +485,61 @@ Please respond in the same language as the user's query (Turkish or English)."""
                 {"role": "user", "content": user_input}
             ],
             "temperature": 0.7,
-            "max_tokens": 500,
-            "response_format": {"type": "text"}
+            "max_tokens": 500
         }
         
-        response = requests.post(OPENAI_API_URL, headers=headers, json=data, timeout=10)
+        # Log the request details
+        logger.info(f"Making API request to OpenAI")
+        logger.info(f"Headers: {headers}")
+        logger.info(f"Data: {json.dumps(data)}")
+        
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers=headers,
+            json=data,
+            timeout=10
+        )
+        
+        # Log the response details
+        logger.info(f"API Response Status Code: {response.status_code}")
+        logger.info(f"API Response Headers: {response.headers}")
+        
+        try:
+            response_json = response.json()
+            logger.info(f"API Response Body: {json.dumps(response_json)}")
+        except json.JSONDecodeError:
+            logger.error(f"Failed to decode JSON response. Raw response: {response.text}")
+            raise Exception("Invalid JSON response from API")
         
         if response.status_code != 200:
-            logger.error(f"API Error Response: {response.text}")
-            return generate_response_rule_based(user_input)
+            error_message = response_json.get('error', {}).get('message', response.text)
+            logger.error(f"API Error: {error_message}")
+            raise Exception(f"API Error: {error_message}")
             
-        result = response.json()
-        
-        if (isinstance(result, dict) and 
-            "choices" in result and 
-            isinstance(result["choices"], list) and 
-            len(result["choices"]) > 0 and 
-            isinstance(result["choices"][0], dict)):
+        if "choices" in response_json and len(response_json["choices"]) > 0:
+            response_text = response_json["choices"][0]["message"]["content"]
             
-            response_text = result["choices"][0].get("message", {}).get("content")
-            if response_text:
-                response_cache[user_input] = response_text
-                return response_text
+            # If it's a PDF processing request, execute it
+            if any(word in lower_input for word in ['işle', 'process', 'hafta']):
+                pdf_response = process_pdf_request(lower_input)
+                # Only return the PDF processing response, not the GPT response
+                return pdf_response
+            
+            # Cache the response
+            response_cache[user_input] = response_text
+            return response_text
         
-        logger.error(f"Unexpected API response format: {result}")
-        return generate_response_rule_based(user_input)
+        raise Exception("Unexpected API response format")
             
     except requests.exceptions.RequestException as e:
+        logger.error(f"Request failed: {str(e)}")
+        raise Exception(f"Failed to connect to OpenAI API: {str(e)}")
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON decode error: {str(e)}")
+        raise Exception("Invalid response format from API")
+    except Exception as e:
         logger.error(f"API request error: {str(e)}")
-        return generate_response_rule_based(user_input)
+        raise
 
 def generate_response_rule_based(user_input: str) -> str:
     """Enhanced rule-based response generator with better context handling"""
@@ -527,6 +598,11 @@ os.makedirs(PDF_SAMPLES_FOLDER, exist_ok=True)
 os.makedirs(DOWNLOADS_FOLDER, exist_ok=True)
 os.makedirs(PROCESSED_FOLDER, exist_ok=True)
 
+# Log directory paths
+print(f"PDF_SAMPLES_FOLDER: {PDF_SAMPLES_FOLDER}")
+print(f"DOWNLOADS_FOLDER: {DOWNLOADS_FOLDER}")
+print(f"PROCESSED_FOLDER: {PROCESSED_FOLDER}")
+
 # Print database status
 print("Database initialized successfully")
 print(f"Using database at: {db_handler.db_path}")
@@ -543,190 +619,260 @@ def index():
 @app.route('/manual-process', methods=['GET', 'POST'])
 def manual_process():
     if request.method == 'POST':
-        selected_week = request.form.get('selected_week')
-        
-        if not selected_week:
-            return jsonify({'success': False, 'error': 'No week selected'})
-        
         try:
+            # Check CSRF token
+            csrf_token = request.headers.get('X-CSRF-Token')
+            if not csrf_token:
+                return jsonify({
+                    'success': False,
+                    'error': 'Missing CSRF token'
+                }), 400
+
+            # Validate form data
+            selected_week = request.form.get('selected_week')
+            if not selected_week:
+                return jsonify({
+                    'success': False,
+                    'error': 'No week selected'
+                }), 400
+            
             # Parse week range
-            week_start, week_end = selected_week.split(',')
-            week_start_date = datetime.strptime(week_start, '%Y-%m-%d')
-            week_end_date = datetime.strptime(week_end, '%Y-%m-%d')
+            try:
+                week_start, week_end = selected_week.split(',')
+                week_start_date = datetime.strptime(week_start, '%Y-%m-%d')
+                week_end_date = datetime.strptime(week_end, '%Y-%m-%d')
+            except (ValueError, TypeError) as e:
+                return jsonify({
+                    'success': False,
+                    'error': f'Invalid date format: {str(e)}'
+                }), 400
             
             processed_files = []
             skipped_files = []
             auto_emailed_files = []
+            visible_pdfs = []
+            
+            logger.info(f"Selected week: {week_start} to {week_end}")
             
             # Process all PDFs in the samples folder
             for pdf_name in os.listdir(PDF_SAMPLES_FOLDER):
+                if not pdf_name.endswith('.pdf'):
+                    continue
+                    
                 pdf_path = os.path.join(PDF_SAMPLES_FOLDER, pdf_name)
                 if not os.path.exists(pdf_path):
                     continue
 
-                # Extract information from PDF
-                pdf_info = PDFProcessor.extract_invoice_info(pdf_path)
-                
-                if not pdf_info:
-                    continue
+                try:
+                    # Extract information from PDF
+                    pdf_info = PDFProcessor.extract_invoice_info(pdf_path)
+                    
+                    if not pdf_info:
+                        logger.warning(f"Could not extract info from {pdf_name}")
+                        continue
 
-                # Convert dates for comparison
-                pdf_start = datetime.strptime(pdf_info['period_start'], '%Y-%m-%d')
-                pdf_end = datetime.strptime(pdf_info['period_end'], '%Y-%m-%d')
-                
-                # Check if PDF's date range overlaps with selected week
-                if not ((pdf_start <= week_end_date and pdf_end >= week_start_date) or
-                        (week_start_date <= pdf_end and week_end_date >= pdf_start)):
-                    continue
+                    # Convert dates for comparison
+                    pdf_start = datetime.strptime(pdf_info['period_start'], '%Y-%m-%d')
+                    pdf_end = datetime.strptime(pdf_info['period_end'], '%Y-%m-%d')
+                    
+                    logger.info(f"Checking PDF: {pdf_name}")
+                    logger.info(f"PDF dates: {pdf_info['period_start']} to {pdf_info['period_end']}")
+                    
+                    # Check if PDF's date range overlaps with selected week
+                    date_overlap = (
+                        (pdf_start <= week_end_date and pdf_start >= week_start_date) or  # PDF starts in week
+                        (pdf_end >= week_start_date and pdf_end <= week_end_date) or      # PDF ends in week
+                        (pdf_start <= week_start_date and pdf_end >= week_end_date)       # PDF encompasses week
+                    )
+                    
+                    logger.info(f"Date overlap: {date_overlap}")
+                    
+                    if not date_overlap:
+                        logger.info("PDF is hidden")
+                        continue
+                        
+                    logger.info("PDF is visible")
+                    
+                    # Get company name from filename if not in PDF
+                    company_name = pdf_info.get('company_name')
+                    if not company_name:
+                        company_name = pdf_name.split('_')[0].replace('_', ' ').title()
 
-                # Get company name from filename if not in PDF
-                company_name = pdf_info.get('company_name')
-                if not company_name:
-                    company_name = pdf_name.split('_')[0].replace('_', ' ').title()
-
-                invoice_number = pdf_info['invoice_number']
-                # Create a unique filename using invoice number, company name, and period dates
-                safe_company_name = secure_filename(company_name)
-                period_start_str = pdf_info['period_start'].replace('-', '')
-                period_end_str = pdf_info['period_end'].replace('-', '')
-                unique_filename = f"{safe_company_name}_{invoice_number}_{period_start_str}_{period_end_str}.pdf"
-                
-                download_path = os.path.join(DOWNLOADS_FOLDER, unique_filename)
-                processed_path = os.path.join(PROCESSED_FOLDER, unique_filename)
-
-                # Skip if file already exists in downloads or processed folder
-                if os.path.exists(download_path) or os.path.exists(processed_path):
-                    skipped_files.append({
+                    invoice_number = pdf_info['invoice_number']
+                    
+                    # Add to visible PDFs list
+                    visible_pdfs.append({
                         'filename': pdf_name,
-                        'reason': 'File already exists in downloads or processed folder'
+                        'invoice_number': invoice_number,
+                        'company_name': company_name,
+                        'period_start': pdf_info['period_start'],
+                        'period_end': pdf_info['period_end']
                     })
-                    continue
+                    
+                    # Create a unique filename
+                    safe_company_name = secure_filename(company_name)
+                    period_start_str = pdf_info['period_start'].replace('-', '')
+                    period_end_str = pdf_info['period_end'].replace('-', '')
+                    unique_filename = f"{safe_company_name}_{invoice_number}_{period_start_str}_{period_end_str}.pdf"
+                    
+                    download_path = os.path.join(DOWNLOADS_FOLDER, unique_filename)
+                    processed_path = os.path.join(PROCESSED_FOLDER, unique_filename)
 
-                # Copy file to downloads folder
-                shutil.copy2(pdf_path, download_path)
-
-                # Check if we have a matching email for auto-sending
-                company_email = db_handler.get_company_email(company_name)
-                
-                if company_email:
-                    try:
-                        # Send email automatically
-                        email_handler.send_email(
-                            to_email=company_email,
-                            subject=f'Invoice {invoice_number} for {company_name}',
-                            body=f'Please find attached the invoice {invoice_number} for the period {pdf_info["period_start"]} to {pdf_info["period_end"]}.',
-                            attachment_path=download_path
-                        )
-                        
-                        # Move to processed folder after successful email
-                        shutil.move(download_path, processed_path)
-                        
-                        auto_emailed_files.append({
+                    # Skip if file already exists in downloads or processed folder
+                    if os.path.exists(download_path) or os.path.exists(processed_path):
+                        skipped_files.append({
                             'filename': pdf_name,
                             'invoice_number': invoice_number,
                             'company_name': company_name,
-                            'email': company_email
+                            'reason': 'File already exists'
                         })
-                    except Exception as e:
-                        print(f"Error sending email for {pdf_name}: {str(e)}")
-                        # Keep in downloads folder if email fails
+                        continue
+
+                    # Copy file to downloads folder
+                    shutil.copy2(pdf_path, download_path)
+
+                    # Check if we have a matching email for auto-sending
+                    company_email = db_handler.get_company_email(company_name)
+                    
+                    if company_email:
+                        try:
+                            # Send email automatically
+                            success = email_handler.send_email(
+                                to_email=company_email,
+                                subject=f'Invoice {invoice_number} for {company_name}',
+                                body=f'Please find attached the invoice {invoice_number} for the period {pdf_info["period_start"]} to {pdf_info["period_end"]}.',
+                                attachments=[download_path]
+                            )
+                            
+                            if success:
+                                # Move to processed folder after successful email
+                                shutil.move(download_path, processed_path)
+                                db_handler.mark_as_sent(invoice_number, company_email)
+                                
+                                auto_emailed_files.append({
+                                    'filename': pdf_name,
+                                    'invoice_number': invoice_number,
+                                    'company_name': company_name,
+                                    'email': company_email
+                                })
+                            else:
+                                raise Exception("Failed to send email")
+                                
+                        except Exception as e:
+                            logger.error(f"Error sending email for {pdf_name}: {str(e)}")
+                            # Keep in downloads folder if email fails
+                            processed_files.append({
+                                'filename': pdf_name,
+                                'invoice_number': invoice_number,
+                                'company_name': company_name,
+                                'status': 'pending'
+                            })
+                    else:
+                        # Add to pending requests if no matching email
+                        db_handler.add_pending_request(
+                            invoice_number=invoice_number,
+                            company_name=company_name,
+                            pdf_path=download_path,
+                            period_start=pdf_info['period_start'],
+                            period_end=pdf_info['period_end']
+                        )
+                        
                         processed_files.append({
                             'filename': pdf_name,
                             'invoice_number': invoice_number,
-                            'company_name': company_name
+                            'company_name': company_name,
+                            'status': 'pending'
                         })
-                else:
-                    # Add to pending requests if no matching email
-                    db_handler.add_pending_request(
-                        invoice_number=invoice_number,
-                        company_name=company_name,
-                        pdf_path=download_path,
-                        period_start=pdf_info['period_start'],
-                        period_end=pdf_info['period_end']
-                    )
-                    
-                    # Send notification email to internal staff
-                    try:
-                        # Send the notification email directly
-                        email_handler.send_email(
-                            to_email=email_handler.internal_email,
-                            subject=f'Missing Email Address for Invoice {invoice_number}',
-                            body=f'{invoice_number} numaralı şirketin mail adresi bulunamadı.\n\n'
-                                 f'Bekleyen işlemleri görüntülemek için tıklayın: {request.host_url}pending'
-                        )
-                        print(f"Notification email sent successfully to {email_handler.internal_email}")
-                    except Exception as e:
-                        print(f"Error sending notification email: {str(e)}")
-                        raise Exception(f"Failed to send notification email: {str(e)}")
-                    
-                    processed_files.append({
-                        'filename': pdf_name,
-                        'invoice_number': invoice_number,
-                        'company_name': company_name
-                    })
+                        
+                except Exception as e:
+                    logger.error(f"Error processing {pdf_name}: {str(e)}")
+                    continue
             
-            # Prepare response message
-            message_parts = []
+            # Send notification email to internal department if any files were processed
             if processed_files:
-                message_parts.append(f"Processed {len(processed_files)} PDFs")
-            if auto_emailed_files:
-                message_parts.append(f"Automatically emailed {len(auto_emailed_files)} PDFs")
-            if skipped_files:
-                message_parts.append(f"Skipped {len(skipped_files)} existing PDFs")
+                try:
+                    # Prepare email content
+                    subject = f"New Pending Invoices Added (Manual Processing)"
+                    body = f"The following invoices have been processed and added to the pending table:\n\n"
+                    for file in processed_files:
+                        body += f"- Invoice {file['invoice_number']} ({file['company_name']})\n"
+                    body += f"\nPlease review these invoices at: {request.host_url}pending"
+                    
+                    # Send notification email
+                    email_handler.send_email(
+                        to_email=email_handler.internal_email,
+                        subject=subject,
+                        body=body
+                    )
+                    logger.info("Sent notification email to internal department")
+                except Exception as e:
+                    logger.error(f"Failed to send notification email: {str(e)}")
             
-            message = ". ".join(message_parts) + "."
+            logger.info(f"Total visible PDFs: {len(visible_pdfs)}")
             
             return jsonify({
                 'success': True,
-                'message': message,
+                'message': f"Processed {len(processed_files)} files, auto-emailed {len(auto_emailed_files)} files, skipped {len(skipped_files)} files",
                 'processed_files': processed_files,
                 'auto_emailed_files': auto_emailed_files,
-                'skipped_files': skipped_files
+                'skipped_files': skipped_files,
+                'visible_pdfs': visible_pdfs
             })
             
         except Exception as e:
-            return jsonify({'success': False, 'error': str(e)})
+            logger.error(f"Error in manual processing: {str(e)}")
+            return jsonify({
+                'success': False,
+                'error': str(e)
+            }), 500
     
-    # Get list of PDFs from the samples folder
-    pdfs = []
-    for pdf in os.listdir(PDF_SAMPLES_FOLDER):
-        try:
-            pdf_path = os.path.join(PDF_SAMPLES_FOLDER, pdf)
-            pdf_info = PDFProcessor.extract_invoice_info(pdf_path)
-            if pdf_info:
-                # Get company name from filename if not in PDF
-                company_name = pdf_info.get('company_name')
-                if not company_name:
-                    # Extract company name from filename (before first underscore)
-                    company_name = pdf.split('_')[0].replace('_', ' ').title()
+    # GET request - render the manual processing page
+    try:
+        # Get list of PDFs from the samples folder
+        pdfs = []
+        for pdf in os.listdir(PDF_SAMPLES_FOLDER):
+            if not pdf.endswith('.pdf'):
+                continue
                 
-                pdfs.append({
-                    'filename': pdf,
-                    'invoice_number': pdf_info['invoice_number'],
-                    'company_name': company_name,
-                    'period_start': pdf_info['period_start'],
-                    'period_end': pdf_info['period_end']
-                })
-        except Exception as e:
-            print(f"Error processing {pdf}: {str(e)}")
-            # Try to extract dates from filename as fallback
             try:
-                parts = pdf.replace('.pdf', '').split('_')
-                if len(parts) >= 2:
-                    date_range = parts[1]
-                    period_start, period_end = date_range.split('-')
+                pdf_path = os.path.join(PDF_SAMPLES_FOLDER, pdf)
+                pdf_info = PDFProcessor.extract_invoice_info(pdf_path)
+                if pdf_info:
+                    # Get company name from filename if not in PDF
+                    company_name = pdf_info.get('company_name')
+                    if not company_name:
+                        company_name = pdf.split('_')[0].replace('_', ' ').title()
+                    
                     pdfs.append({
                         'filename': pdf,
-                        'invoice_number': 'N/A',
-                        'company_name': parts[0].replace('_', ' ').title(),
-                        'period_start': datetime.strptime(period_start, '%Y%m%d').strftime('%Y-%m-%d'),
-                        'period_end': datetime.strptime(period_end, '%Y%m%d').strftime('%Y-%m-%d')
+                        'invoice_number': pdf_info['invoice_number'],
+                        'company_name': company_name,
+                        'period_start': pdf_info['period_start'],
+                        'period_end': pdf_info['period_end']
                     })
-            except Exception as e2:
-                print(f"Could not extract dates from filename {pdf}: {str(e2)}")
-            continue
+            except Exception as e:
+                logger.error(f"Error processing {pdf}: {str(e)}")
+                continue
+                
+        # Check if request wants JSON
+        if request.headers.get('Accept') == 'application/json':
+            return jsonify({
+                'success': True,
+                'pdfs': pdfs
+            })
             
-    return render_template('manual_process.html', pdfs=pdfs)
+        # Return HTML template with generated CSRF token
+        return render_template('manual_process.html', pdfs=pdfs)
+        
+    except Exception as e:
+        logger.error(f"Error rendering manual process page: {str(e)}")
+        if request.headers.get('Accept') == 'application/json':
+            return jsonify({
+                'success': False,
+                'error': str(e)
+            }), 500
+        flash(f'Error: {str(e)}', 'error')
+        return render_template('manual_process.html', pdfs=[])
 
 @app.route('/pending')
 def pending_requests():
@@ -824,33 +970,87 @@ def send_email():
 def get_chat(chat_id):
     """Get messages for a specific chat session"""
     messages = db_handler.get_chat_messages(chat_id)
-    return jsonify({'messages': messages})
+    topic = db_handler.get_chat_topic(chat_id)
+    
+    # Return JSON if requested
+    if request.headers.get('Accept') == 'application/json':
+        return jsonify({
+            'messages': messages,
+            'topic': topic,
+            'chat_id': chat_id
+        })
+    
+    # Otherwise return HTML template
+    return render_template('index.html', 
+                         messages=messages, 
+                         current_chat_id=chat_id,
+                         chat_history=db_handler.get_chat_history())
 
 @app.route('/chat', methods=['POST'])
 def chat():
     try:
-        data = request.json
+        # Check CSRF token
+        csrf_token = request.headers.get('X-CSRF-Token') or request.form.get('csrf_token')
+        if not csrf_token:
+            logger.error("Missing CSRF token")
+            return jsonify({
+                'error': 'Missing CSRF token'
+            }), 400
+
+        if not request.is_json:
+            logger.error("Request Content-Type is not application/json")
+            return jsonify({
+                'error': 'Content-Type must be application/json'
+            }), 400
+
+        data = request.get_json()
+        if not data:
+            logger.error("No JSON data in request")
+            return jsonify({
+                'error': 'No JSON data provided'
+            }), 400
+
         message = data.get('message')
         chat_id = data.get('chat_id')
         
         if not message:
-            return jsonify({'error': 'No message provided'}), 400
+            logger.error("No message provided in request")
+            return jsonify({
+                'error': 'No message provided'
+            }), 400
 
         # Create new chat session if needed
         if not chat_id:
             session_id = str(uuid.uuid4())
             chat_id = db_handler.create_chat_session(session_id)
             if not chat_id:
-                return jsonify({'error': 'Failed to create chat session'}), 500
+                logger.error("Failed to create chat session")
+                return jsonify({
+                    'error': 'Failed to create chat session'
+                }), 500
 
         # Store user message
-        db_handler.add_chat_message(chat_id, 'user', message)
+        if not db_handler.add_chat_message(chat_id, 'user', message):
+            logger.error("Failed to store user message")
+            return jsonify({
+                'error': 'Failed to store user message'
+            }), 500
 
-        # Generate response using the existing generate_response function
-        response = generate_response(message)
+        try:
+            # Generate response using the existing generate_response function
+            response = generate_response(message)
+        except Exception as e:
+            logger.error(f"Error generating response: {str(e)}")
+            return jsonify({
+                'error': f'Error generating response: {str(e)}'
+            }), 500
         
         # Store bot response
-        db_handler.add_chat_message(chat_id, 'bot', response)
+        if not db_handler.add_chat_message(chat_id, 'bot', response):
+            logger.error("Failed to store bot response")
+            return jsonify({
+                'error': 'Failed to store bot response'
+            }), 500
         
         # Try to generate a topic for new chats
         if not db_handler.get_chat_topic(chat_id):
@@ -861,10 +1061,12 @@ def chat():
             'response': response,
             'chat_id': chat_id
         })
+
     except Exception as e:
         logger.error(f"Error in chat endpoint: {str(e)}")
         return jsonify({
-            'error': 'An error occurred while processing your message'
+            'error': 'An error occurred while processing your message',
+            'details': str(e)
         }), 500
 
 def generate_topic(user_message: str, bot_response: str) -> str:

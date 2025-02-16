@@ -87,23 +87,37 @@
     .message {
         margin-bottom: 15px;
         max-width: 80%;
-        word-wrap: break-word;  /* Ensure long messages wrap */
+        width: fit-content;
+        display: inline-block;
+        word-wrap: break-word;
+        white-space: pre-line;
+        line-height: 1.4;
+        min-height: 0 !important;
+        height: auto;
     }
 
     .message-user {
         margin-left: auto;
+        margin-right: 0;
         background-color: #007bff;
         color: white;
-        padding: 10px 15px;
+        padding: 8px 12px;
         border-radius: 15px 15px 0 15px;
+        display: block;
+        min-height: 0 !important;
+        height: auto;
     }
 
     .message-bot {
         margin-right: auto;
+        margin-left: 0;
         background-color: #f8f9fa;
         border: 1px solid #dee2e6;
-        padding: 10px 15px;
+        padding: 8px 12px;
         border-radius: 15px 15px 15px 0;
+        display: block;
+        min-height: 0 !important;
+        height: auto;
     }
 
     .chat-input-container {
@@ -123,6 +137,47 @@
         resize: none;
         min-height: 40px;
         max-height: 120px;
+        overflow-y: hidden;  /* Hide scrollbar initially */
+    }
+
+    /* Show scrollbar only when content height exceeds the first line */
+    .chat-input {
+        scrollbar-width: none;  /* Firefox */
+        -ms-overflow-style: none;  /* IE and Edge */
+    }
+
+    .chat-input::-webkit-scrollbar {
+        display: none;  /* Chrome, Safari, Opera */
+    }
+
+    /* Show scrollbar when content exceeds one line */
+    .chat-input[style*="height: 120px"],
+    .chat-input[style*="height: 80px"],
+    .chat-input[style*="height: 60px"] {
+        overflow-y: auto;
+        scrollbar-width: auto;
+        -ms-overflow-style: auto;
+    }
+
+    .chat-input[style*="height: 120px"]::-webkit-scrollbar,
+    .chat-input[style*="height: 80px"]::-webkit-scrollbar,
+    .chat-input[style*="height: 60px"]::-webkit-scrollbar {
+        display: block;
+        width: 8px;
+    }
+
+    .chat-input::-webkit-scrollbar-track {
+        background: #f1f1f1;
+        border-radius: 4px;
+    }
+
+    .chat-input::-webkit-scrollbar-thumb {
+        background: #c1c1c1;
+        border-radius: 4px;
+    }
+
+    .chat-input::-webkit-scrollbar-thumb:hover {
+        background: #a8a8a8;
     }
 
     .chat-send-btn {
@@ -243,37 +298,183 @@
 <script>
 // Initialize current chat ID and event handlers
 const chatApp = {
-    currentChatId: {{ current_chat_id or 'null' }},
+    currentChatId: JSON.parse('{{ current_chat_id|tojson|safe if current_chat_id else "null" }}'),
+    csrfToken: '{{ csrf_token()|safe }}',
     
     init: function() {
         this.addEventListeners();
         this.focusInput();
     },
-    
+
     addEventListeners: function() {
-        document.querySelectorAll('.chat-content').forEach(element => {
-            element.addEventListener('click', (e) => {
-                const chatId = element.getAttribute('data-chat-id');
-                loadChat(parseInt(chatId));
-            });
+        // Add event listeners for chat history items
+        document.querySelectorAll('.chat-history-item').forEach(item => {
+            item.addEventListener('click', () => this.loadChat(item.dataset.chatId));
         });
 
-        document.querySelectorAll('.delete-chat-btn').forEach(button => {
-            button.addEventListener('click', (e) => {
+        // Add event listeners for delete buttons
+        document.querySelectorAll('.delete-chat-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                const chatId = button.getAttribute('data-chat-id');
-                deleteChat(parseInt(chatId));
+                this.deleteChat(btn.dataset.chatId);
             });
         });
     },
-    
+
     focusInput: function() {
         document.getElementById('messageInput').focus();
+    },
+
+    sendMessage: async function() {
+        const messageInput = document.getElementById('messageInput');
+        const message = messageInput.value.trim();
+        
+        if (!message) return;
+        
+        // Show typing indicator
+        document.getElementById('typingIndicator').style.display = 'block';
+        
+        // Clear input
+        messageInput.value = '';
+        this.adjustTextareaHeight(messageInput);
+        
+        // Add user message to chat
+        this.appendMessage(message, 'user');
+        
+        try {
+            const response = await fetch('/chat', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-Token': this.csrfToken
+                },
+                body: JSON.stringify({
+                    message: message,
+                    chat_id: this.currentChatId
+                })
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            
+            // Update current chat ID if this is a new chat
+            if (!this.currentChatId && data.chat_id) {
+                this.currentChatId = data.chat_id;
+                
+                // Instead of reloading, fetch the updated chat history
+                const historyResponse = await fetch('/chat/' + data.chat_id, {
+                    headers: {
+                        'Accept': 'application/json'
+                    }
+                });
+                const historyData = await historyResponse.json();
+                
+                // Create new chat history item
+                const chatHistoryDiv = document.querySelector('.chat-history');
+                const newChatItem = document.createElement('div');
+                newChatItem.className = 'chat-history-item active';
+                newChatItem.dataset.chatId = data.chat_id;
+                
+                newChatItem.innerHTML = `
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div class="chat-content" data-chat-id="${data.chat_id}">
+                            <div class="chat-history-topic">
+                                ${historyData.topic || 'Untitled Chat'}
+                            </div>
+                            <div class="chat-history-date">
+                                Just now
+                            </div>
+                        </div>
+                        <button class="btn btn-sm btn-link text-danger delete-chat-btn" 
+                                data-chat-id="${data.chat_id}">
+                            <i class="bi bi-trash"></i>
+                        </button>
+                    </div>
+                `;
+                
+                // Remove active class from other chat items
+                document.querySelectorAll('.chat-history-item').forEach(item => {
+                    item.classList.remove('active');
+                });
+                
+                // Add the new chat item at the top of the history
+                if (chatHistoryDiv.firstChild) {
+                    chatHistoryDiv.insertBefore(newChatItem, chatHistoryDiv.firstChild);
+                } else {
+                    chatHistoryDiv.appendChild(newChatItem);
+                }
+                
+                // Add event listeners to the new chat item
+                newChatItem.addEventListener('click', () => this.loadChat(data.chat_id));
+                newChatItem.querySelector('.delete-chat-btn').addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    this.deleteChat(data.chat_id);
+                });
+            }
+            
+            // Add bot response to chat
+            this.appendMessage(data.response, 'bot');
+            
+        } catch (error) {
+            console.error('Error:', error);
+            this.appendMessage('Sorry, there was an error processing your request.', 'bot');
+        } finally {
+            // Hide typing indicator
+            document.getElementById('typingIndicator').style.display = 'none';
+        }
+    },
+
+    appendMessage: function(message, role) {
+        const messagesDiv = document.getElementById('chatMessages');
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `message message-${role}`;
+        messageDiv.textContent = message;
+        messagesDiv.appendChild(messageDiv);
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    },
+
+    adjustTextareaHeight: function(textarea) {
+        textarea.style.height = 'auto';
+        textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+    },
+
+    loadChat: function(chatId) {
+        window.location.href = `/chat/${chatId}`;
+    },
+
+    deleteChat: async function(chatId) {
+        if (!confirm('Are you sure you want to delete this chat?')) return;
+        
+        try {
+            const response = await fetch(`/delete-chat/${chatId}`, {
+                method: 'POST',
+                headers: {
+                    'X-CSRF-Token': this.csrfToken
+                }
+            });
+            
+            if (response.ok) {
+                window.location.reload();
+            } else {
+                alert('Failed to delete chat');
+            }
+        } catch (error) {
+            console.error('Error:', error);
+            alert('Error deleting chat');
+        }
     }
 };
 
-// Initialize when DOM is loaded
+// Initialize the chat application
 document.addEventListener('DOMContentLoaded', () => chatApp.init());
+
+// Global function to handle message sending from button click or enter key
+function sendMessage() {
+    chatApp.sendMessage();
+}
 
 function startNewChat() {
     chatApp.currentChatId = null;
@@ -282,34 +483,6 @@ function startNewChat() {
         item.classList.remove('active');
     });
     chatApp.focusInput();
-}
-
-function loadChat(chatId) {
-    fetch(`/chat/${chatId}`)
-        .then(response => response.json())
-        .then(data => {
-            chatApp.currentChatId = chatId;
-            const messagesDiv = document.getElementById('chatMessages');
-            messagesDiv.innerHTML = '';
-            
-            data.messages.forEach(message => {
-                const messageDiv = document.createElement('div');
-                messageDiv.className = `message message-${message.role === 'user' ? 'user' : 'bot'}`;
-                messageDiv.textContent = message.content;
-                messagesDiv.appendChild(messageDiv);
-            });
-            
-            document.querySelectorAll('.chat-history-item').forEach(item => {
-                item.classList.remove('active');
-            });
-            const activeChat = document.querySelector(`.chat-history-item[data-chat-id="${chatId}"]`);
-            if (activeChat) {
-                activeChat.classList.add('active');
-            }
-            
-            messagesDiv.scrollTop = messagesDiv.scrollHeight;
-        })
-        .catch(error => console.error('Error loading chat:', error));
 }
 
 function showTypingIndicator() {
@@ -331,96 +504,6 @@ function addMessageToUI(message, isUser) {
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
 }
 
-function sendMessage() {
-    const messageInput = document.getElementById('messageInput');
-    const message = messageInput.value.trim();
-    
-    if (!message) return;
-    
-    // Add user message to UI
-    addMessageToUI(message, true);
-    
-    // Clear input and reset height
-    messageInput.value = '';
-    messageInput.style.height = 'auto';
-    
-    // Show typing indicator
-    showTypingIndicator();
-    
-    // Send to server
-    fetch('/chat', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-            message: message,
-            chat_id: chatApp.currentChatId
-        })
-    })
-    .then(response => response.json())
-    .then(data => {
-        // Hide typing indicator
-        hideTypingIndicator();
-        
-        if (data.chat_id && !chatApp.currentChatId) {
-            chatApp.currentChatId = data.chat_id;
-            // Update chat history without reloading
-            fetch('/')
-                .then(response => response.text())
-                .then(html => {
-                    const parser = new DOMParser();
-                    const doc = parser.parseFromString(html, 'text/html');
-                    const newHistory = doc.querySelector('.chat-history').innerHTML;
-                    document.querySelector('.chat-history').innerHTML = newHistory;
-                });
-        }
-        
-        // Add bot response to UI
-        addMessageToUI(data.response, false);
-    })
-    .catch(error => {
-        hideTypingIndicator();
-        console.error('Error:', error);
-        addMessageToUI('Sorry, there was an error processing your message.', false);
-    });
-}
-
-function deleteChat(chatId, event) {
-    event.stopPropagation();
-    
-    if (!confirm('Are you sure you want to delete this chat?')) {
-        return;
-    }
-    
-    fetch(`/delete-chat/${chatId}`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        }
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            const chatItem = document.querySelector(`.chat-history-item[data-chat-id="${chatId}"]`);
-            if (chatItem) {
-                chatItem.remove();
-            }
-            
-            if (chatApp.currentChatId === chatId) {
-                document.getElementById('chatMessages').innerHTML = '';
-                chatApp.currentChatId = null;
-            }
-        } else {
-            alert('Failed to delete chat: ' + (data.error || 'Unknown error'));
-        }
-    })
-    .catch(error => {
-        console.error('Error:', error);
-        alert('Failed to delete chat. Please try again.');
-    });
-}
-
 // Auto-resize textarea
 const messageInput = document.getElementById('messageInput');
 messageInput.addEventListener('input', function() {
@@ -435,5 +518,141 @@ setInterval(() => {
         dots.textContent = dots.textContent.length >= 3 ? '' : dots.textContent + '.';
     }
 }, 500);
+
+document.addEventListener('DOMContentLoaded', function() {
+    // Initialize chat application
+    const chatHistory = document.querySelectorAll('.chat-history-item');
+    const messageContainer = document.querySelector('.message-container');
+    const messageInput = document.querySelector('#message-input');
+    const sendButton = document.querySelector('#send-button');
+    let currentChatId = JSON.parse('{{ current_chat_id|tojson|safe if current_chat_id else "null" }}');
+    const csrfToken = '{{ csrf_token()|safe }}';
+
+    // Function to load chat messages
+    function loadChat(chatId) {
+        currentChatId = chatId;
+        window.history.pushState({}, '', `/chat/${chatId}`);
+        
+        // Clear existing messages
+        messageContainer.innerHTML = '';
+        
+        // Add loading indicator
+        messageContainer.innerHTML = '<div class="loading">Loading messages...</div>';
+        
+        // Get messages for this chat
+        fetch(`/chat/${chatId}`)
+            .then(response => response.json())
+            .then(data => {
+                messageContainer.innerHTML = ''; // Clear loading indicator
+                data.messages.forEach(message => {
+                    const messageDiv = document.createElement('div');
+                    messageDiv.className = `message ${message.role}-message`;
+                    messageDiv.innerHTML = `
+                        <div class="message-content">${message.content}</div>
+                        <div class="message-timestamp">${message.timestamp}</div>
+                    `;
+                    messageContainer.appendChild(messageDiv);
+                });
+                // Scroll to bottom
+                messageContainer.scrollTop = messageContainer.scrollHeight;
+            })
+            .catch(error => {
+                console.error('Error loading chat:', error);
+                messageContainer.innerHTML = '<div class="error">Error loading messages</div>';
+            });
+    }
+
+    // Add click event listeners to chat history items
+    chatHistory.forEach(item => {
+        item.addEventListener('click', function() {
+            const chatId = this.dataset.chatId;
+            loadChat(chatId);
+            
+            // Update active state
+            chatHistory.forEach(i => i.classList.remove('active'));
+            this.classList.add('active');
+        });
+    });
+
+    // Function to send a message
+    function sendMessage(message) {
+        if (!message.trim()) return;
+
+        // Create and append user message immediately
+        const userMessageDiv = document.createElement('div');
+        userMessageDiv.className = 'message user-message';
+        userMessageDiv.innerHTML = `
+            <div class="message-content">${message}</div>
+            <div class="message-timestamp">Just now</div>
+        `;
+        messageContainer.appendChild(userMessageDiv);
+        messageContainer.scrollTop = messageContainer.scrollHeight;
+
+        // Clear input
+        messageInput.value = '';
+
+        // Send message to server
+        fetch('/chat', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': csrfToken
+            },
+            body: JSON.stringify({
+                message: message,
+                chat_id: currentChatId
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                throw new Error(data.error);
+            }
+            
+            // Update currentChatId if this is a new chat
+            if (!currentChatId) {
+                currentChatId = data.chat_id;
+                window.history.pushState({}, '', `/chat/${currentChatId}`);
+            }
+
+            // Create and append bot message
+            const botMessageDiv = document.createElement('div');
+            botMessageDiv.className = 'message bot-message';
+            botMessageDiv.innerHTML = `
+                <div class="message-content">${data.response}</div>
+                <div class="message-timestamp">Just now</div>
+            `;
+            messageContainer.appendChild(botMessageDiv);
+            messageContainer.scrollTop = messageContainer.scrollHeight;
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            const errorDiv = document.createElement('div');
+            errorDiv.className = 'message error-message';
+            errorDiv.textContent = 'Error sending message. Please try again.';
+            messageContainer.appendChild(errorDiv);
+            messageContainer.scrollTop = messageContainer.scrollHeight;
+        });
+    }
+
+    // Add event listeners for sending messages
+    sendButton.addEventListener('click', () => sendMessage(messageInput.value));
+    messageInput.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendMessage(this.value);
+        }
+    });
+
+    // Load initial chat if we have a current_chat_id
+    if (currentChatId) {
+        loadChat(currentChatId);
+        // Set active state on the current chat in history
+        const currentChatItem = document.querySelector(`.chat-history-item[data-chat-id="${currentChatId}"]`);
+        if (currentChatItem) {
+            currentChatItem.classList.add('active');
+        }
+    }
+});
 </script>
 {% endblock %} 
