@@ -7,42 +7,71 @@
     <h1 class="mb-4">Email Settings</h1>
     
     <div class="card mb-4">
+        <div class="card-header">
+            <h5 class="mb-0">Email Configuration</h5>
+        </div>
         <div class="card-body">
             <form method="POST">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                 <div class="mb-3">
-                    <label for="sender_email" class="form-label">Sender Email (Gmail)</label>
+                    <label for="sender_email" class="form-label">Sender Email (Microsoft 365)</label>
                     <input type="email" class="form-control" id="sender_email" name="sender_email" 
                            value="{{ sender_email }}" required>
                     <div class="form-text">
-                        This must be a Gmail address that will be used to send emails.
+                        Company email address used to send invoices (Microsoft 365 account).
                     </div>
                 </div>
                 
                 <div class="mb-3">
-                    <label for="app_password" class="form-label">Gmail App Password</label>
-                    <input type="password" class="form-control" id="app_password" name="app_password" 
-                           value="{{ app_password }}" required>
-                    <div class="form-text">
-                        <strong>Important:</strong> This must be an App Password, not your regular Gmail password.<br>
-                        To generate an App Password:
-                        <ol>
-                            <li>Go to your Google Account settings</li>
-                            <li>Enable 2-Step Verification if not already enabled</li>
-                            <li>Go to Security → App Passwords</li>
-                            <li>Select 'Mail' and your device</li>
-                            <li>Use the generated 16-character password</li>
-                        </ol>
-                    </div>
-                </div>
-                
-                <div class="mb-3">
-                    <label for="internal_email" class="form-label">Internal Staff Email</label>
+                    <label for="internal_email" class="form-label">Internal Department Email</label>
                     <input type="email" class="form-control" id="internal_email" name="internal_email" 
                            value="{{ internal_email }}" required>
                     <div class="form-text">
-                        This email address will receive notifications about missing company emails.
+                        Internal department email address that will receive notifications about missing company emails.
                     </div>
+                </div>
+                
+                <hr>
+                <h5>Microsoft Graph API Authentication (OAuth 2.0)</h5>
+                <p class="text-muted">These settings are required for sending emails through Microsoft 365.</p>
+                
+                <div class="mb-3">
+                    <label for="ms_tenant_id" class="form-label">Tenant ID</label>
+                    <input type="text" class="form-control" id="ms_tenant_id" name="ms_tenant_id" 
+                           value="{{ ms_tenant_id }}">
+                    <div class="form-text">
+                        The Microsoft 365 tenant ID (from Azure Portal).
+                    </div>
+                </div>
+                
+                <div class="mb-3">
+                    <label for="ms_client_id" class="form-label">Client ID</label>
+                    <input type="text" class="form-control" id="ms_client_id" name="ms_client_id" 
+                           value="{{ ms_client_id }}">
+                    <div class="form-text">
+                        The application (client) ID from Azure Portal.
+                    </div>
+                </div>
+                
+                <div class="mb-3">
+                    <label for="ms_client_secret" class="form-label">Client Secret</label>
+                    <div class="input-group">
+                        <input type="password" class="form-control" id="ms_client_secret" name="ms_client_secret" 
+                               placeholder="Enter new client secret if needed" value="">
+                        <button class="btn btn-outline-secondary" type="button" id="toggleSecret">
+                            <i class="bi bi-eye"></i>
+                        </button>
+                    </div>
+                    <div class="form-text text-warning">
+                        <i class="bi bi-exclamation-triangle"></i> For security reasons, existing client secret is not displayed. 
+                        Only enter a new value if you want to change it. Leave blank to keep the current value.
+                    </div>
+                </div>
+                
+                <div class="alert alert-info" role="alert">
+                    <i class="bi bi-info-circle"></i> <strong>Security Note:</strong> For production environments, 
+                    it's recommended to store sensitive credentials like Client Secret in secure environment variables 
+                    rather than in the application database.
                 </div>
                 
                 <button type="submit" class="btn btn-primary">Save Settings</button>
@@ -69,10 +98,10 @@
                         <tbody>
                             {% for company in companies %}
                                 <tr>
-                                    <td>{{ company.company_name }}</td>
+                                    <td>{{ company.name }}</td>
                                     <td>{{ company.email }}</td>
                                     <td>
-                                        <a href="{{ url_for('company_email_history', company_name=company.company_name) }}" 
+                                        <a href="{{ url_for('company_email_history', company_name=company.name) }}" 
                                            class="btn btn-sm btn-info">
                                             <i class="bi bi-clock-history"></i> View History
                                         </a>
@@ -110,4 +139,31 @@
         </div>
     </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // Toggle password visibility
+        const toggleBtn = document.getElementById('toggleSecret');
+        const secretInput = document.getElementById('ms_client_secret');
+        
+        if (toggleBtn && secretInput) {
+            toggleBtn.addEventListener('click', function() {
+                const type = secretInput.getAttribute('type') === 'password' ? 'text' : 'password';
+                secretInput.setAttribute('type', type);
+                
+                // Toggle icon
+                const icon = toggleBtn.querySelector('i');
+                if (type === 'password') {
+                    icon.classList.remove('bi-eye-slash');
+                    icon.classList.add('bi-eye');
+                } else {
+                    icon.classList.remove('bi-eye');
+                    icon.classList.add('bi-eye-slash');
+                }
+            });
+        }
+    });
+</script>
 {% endblock %} 

@@ -1,126 +1,140 @@
-# Receipt Automation
+# Receipt Automation System
 
-A web application for automating receipt processing and email handling.
+A comprehensive web application for automating the processing of PDF invoices, extracting key information, and managing email delivery to clients.
 
 ## Features
 
-- PDF Receipt Processing
-- Automated Email Handling
-- Database Management
-- Web Interface for Easy Access
-- RESTful API Backend
+- **Automated PDF Processing**: Automatically download and process PDF invoices from Beox Cockpit
+- **Data Extraction**: Extract invoice numbers, company names, dates, and amounts from PDFs
+- **Email Management**: Send invoices to clients via email with tracking
+- **Company Email Association**: Remember email addresses for companies for future automation
+- **Manual Processing**: Process PDFs for specific date ranges manually
+- **Pending Requests Management**: View and manage pending invoice requests
+- **Search Functionality**: Filter company names in the pending requests list
+- **Settings Management**: Configure system settings and email templates
 
-## Prerequisites
+## Technical Overview
 
-- Python 3.9 or higher
-- Node.js 18 or higher
-- Docker (optional)
+The system is built with:
+- **Backend**: Python with Flask web framework
+- **Database**: SQLite for data storage
+- **PDF Processing**: PyPDF2 and pdfplumber for text extraction
+- **Web Scraping**: Requests and BeautifulSoup for downloading PDFs
+- **Email**: SMTP integration for sending emails
+- **Frontend**: Bootstrap 5, HTML, CSS, and JavaScript
 
-## Installation
+## Setup Instructions
 
-### Option 1: Running with Docker
+### Prerequisites
 
-1. Clone the repository:
-```bash
-git clone https://github.com/gumusluyigit/bot_automate.git
-cd bot_automate
-```
+- Python 3.8 or higher
+- pip (Python package manager)
+- Git (optional, for cloning the repository)
 
-2. Build and run with Docker Compose:
-```bash
-docker-compose up --build
-```
+### Installation
 
-The application will be available at http://localhost:5000
+1. Clone the repository (or download and extract the ZIP file):
+   ```
+   git clone https://github.com/gumusluyigit/bot_automate.git
+   cd bot_automate
+   ```
 
-### Option 2: Manual Setup
+2. Create and activate a virtual environment (recommended):
+   ```
+   python -m venv venv
+   
+   # On Windows
+   venv\Scripts\activate
+   
+   # On macOS/Linux
+   source venv/bin/activate
+   ```
 
-1. Clone the repository:
-```bash
-git clone https://github.com/gumusluyigit/bot_automate.git
-cd bot_automate
-```
+3. Install the required packages:
+   ```
+   pip install -r requirements.txt
+   ```
 
-2. Set up the backend:
-```bash
-# Create and activate virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+4. Create a `.env` file in the project root with the following variables:
+   ```
+   # Beox Cockpit credentials
+   BEOX_USERNAME=your_username
+   BEOX_PASSWORD=your_password
+   
+   # Email configuration
+   SMTP_SERVER=smtp.example.com
+   SMTP_PORT=587
+   SMTP_USERNAME=your_email@example.com
+   SMTP_PASSWORD=your_email_password
+   
+   # Internal notification email
+   INTERNAL_EMAIL=notifications@example.com
+   
+   # OpenAI API key (optional, for AI features)
+   OPENAI_API_KEY=your_openai_api_key
+   
+   # Flask secret key (for session security)
+   SECRET_KEY=generate_a_secure_random_key
+   ```
 
-# Install dependencies
-pip install -r requirements.txt
-```
+5. Initialize the database:
+   ```
+   python database_handler.py
+   ```
 
-3. Set up the frontend:
-```bash
-cd frontend
-npm install
-npm run build
-cd ..
-```
+### Running the Application
 
-4. Create necessary directories:
-```bash
-mkdir uploads processed
-```
+1. Start the Flask application:
+   ```
+   python app.py
+   ```
 
-5. Set up environment variables:
-```bash
-cp .env.example .env
-# Edit .env with your configuration
-```
+2. Access the web interface at:
+   ```
+   http://localhost:5000
+   ```
 
-6. Run the application:
-```bash
-python app.py
-```
+## Usage Guide
 
-The application will be available at http://localhost:5000
+### Manual Processing
 
-## API Endpoints
+1. Navigate to the "Manual Processing" page
+2. Select a week from the dropdown menu
+3. The system will display available PDFs for that week
+4. Click "Process PDFs" to extract information and store in the database
+5. PDFs for companies with registered emails will be sent automatically
+6. Other PDFs will be added to the pending requests
 
-- `GET /api/health` - Health check endpoint
-- `POST /api/process_pdf` - Process a PDF file
-- `GET /api/pending_requests` - Get all pending requests
-- `POST /api/send_email` - Send email with receipt
-- `GET /api/download_pdf/<invoice_number>` - Download a processed PDF
+### Pending Requests
 
-## Development
+1. Navigate to the "Pending Requests" page
+2. Use the search bar to filter by company name
+3. Click "Send Email" for a specific invoice
+4. Enter the recipient's email address
+5. The system will send the invoice and remember the email for future use
 
-### Backend Development
+### Settings
 
-The backend is built with Flask and provides RESTful APIs for the frontend.
+1. Navigate to the "Settings" page
+2. Configure email templates and system settings
+3. View and manage company email associations
 
-To run the backend in development mode:
-```bash
-python app.py
-```
+## Troubleshooting
 
-### Frontend Development
+- **PDF Processing Issues**: Check the `automation.log` file for detailed error messages
+- **Email Sending Failures**: Verify SMTP settings in the `.env` file
+- **Database Errors**: Use the `check_db.py` script to diagnose database issues
 
-The frontend is built with React and Material-UI.
+## Maintenance
 
-To run the frontend in development mode:
-```bash
-cd frontend
-npm start
-```
-
-## Testing
-
-Run the tests with:
-```bash
-python -m pytest
-```
-
-## Contributing
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+- **Logs**: Check `automation.log` for system activity and errors
+- **Database Backup**: Periodically backup the `invoice_emails.db` file
+- **Cache Clearing**: Delete files in the `cache` directory if experiencing issues
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is proprietary software. All rights reserved.
+
+## Support
+
+For support inquiries, please contact the developer at your_email@example.com.

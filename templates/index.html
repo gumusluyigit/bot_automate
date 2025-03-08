@@ -82,6 +82,8 @@
         border-radius: 5px;
         margin-right: -5px; /* Compensate for scrollbar */
         padding-right: 20px; /* Add padding for scrollbar */
+        position: relative; /* Add position relative */
+        min-height: 0; /* Prevent expanding */
     }
 
     .message {
@@ -92,8 +94,12 @@
         word-wrap: break-word;
         white-space: pre-line;
         line-height: 1.4;
-        min-height: 0 !important;
-        height: auto;
+        overflow: hidden !important; /* Force hidden overflow */
+        box-sizing: border-box; /* Include padding in height calculation */
+        max-height: none !important; /* Remove max-height restriction */
+        text-overflow: unset; /* Remove ellipsis */
+        height: auto !important; /* Allow natural height */
+        position: relative; /* Add position relative */
     }
 
     .message-user {
@@ -104,8 +110,6 @@
         padding: 8px 12px;
         border-radius: 15px 15px 0 15px;
         display: block;
-        min-height: 0 !important;
-        height: auto;
     }
 
     .message-bot {
@@ -116,8 +120,6 @@
         padding: 8px 12px;
         border-radius: 15px 15px 15px 0;
         display: block;
-        min-height: 0 !important;
-        height: auto;
     }
 
     .chat-input-container {
@@ -432,6 +434,7 @@ const chatApp = {
         const messageDiv = document.createElement('div');
         messageDiv.className = `message message-${role}`;
         messageDiv.textContent = message;
+        
         messagesDiv.appendChild(messageDiv);
         messagesDiv.scrollTop = messagesDiv.scrollHeight;
     },
@@ -500,6 +503,7 @@ function addMessageToUI(message, isUser) {
     const messageDiv = document.createElement('div');
     messageDiv.className = `message message-${isUser ? 'user' : 'bot'}`;
     messageDiv.textContent = message;
+    
     messagesDiv.appendChild(messageDiv);
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
 }
@@ -521,138 +525,7 @@ setInterval(() => {
 
 document.addEventListener('DOMContentLoaded', function() {
     // Initialize chat application
-    const chatHistory = document.querySelectorAll('.chat-history-item');
-    const messageContainer = document.querySelector('.message-container');
-    const messageInput = document.querySelector('#message-input');
-    const sendButton = document.querySelector('#send-button');
-    let currentChatId = JSON.parse('{{ current_chat_id|tojson|safe if current_chat_id else "null" }}');
-    const csrfToken = '{{ csrf_token()|safe }}';
-
-    // Function to load chat messages
-    function loadChat(chatId) {
-        currentChatId = chatId;
-        window.history.pushState({}, '', `/chat/${chatId}`);
-        
-        // Clear existing messages
-        messageContainer.innerHTML = '';
-        
-        // Add loading indicator
-        messageContainer.innerHTML = '<div class="loading">Loading messages...</div>';
-        
-        // Get messages for this chat
-        fetch(`/chat/${chatId}`)
-            .then(response => response.json())
-            .then(data => {
-                messageContainer.innerHTML = ''; // Clear loading indicator
-                data.messages.forEach(message => {
-                    const messageDiv = document.createElement('div');
-                    messageDiv.className = `message ${message.role}-message`;
-                    messageDiv.innerHTML = `
-                        <div class="message-content">${message.content}</div>
-                        <div class="message-timestamp">${message.timestamp}</div>
-                    `;
-                    messageContainer.appendChild(messageDiv);
-                });
-                // Scroll to bottom
-                messageContainer.scrollTop = messageContainer.scrollHeight;
-            })
-            .catch(error => {
-                console.error('Error loading chat:', error);
-                messageContainer.innerHTML = '<div class="error">Error loading messages</div>';
-            });
-    }
-
-    // Add click event listeners to chat history items
-    chatHistory.forEach(item => {
-        item.addEventListener('click', function() {
-            const chatId = this.dataset.chatId;
-            loadChat(chatId);
-            
-            // Update active state
-            chatHistory.forEach(i => i.classList.remove('active'));
-            this.classList.add('active');
-        });
-    });
-
-    // Function to send a message
-    function sendMessage(message) {
-        if (!message.trim()) return;
-
-        // Create and append user message immediately
-        const userMessageDiv = document.createElement('div');
-        userMessageDiv.className = 'message user-message';
-        userMessageDiv.innerHTML = `
-            <div class="message-content">${message}</div>
-            <div class="message-timestamp">Just now</div>
-        `;
-        messageContainer.appendChild(userMessageDiv);
-        messageContainer.scrollTop = messageContainer.scrollHeight;
-
-        // Clear input
-        messageInput.value = '';
-
-        // Send message to server
-        fetch('/chat', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-CSRF-Token': csrfToken
-            },
-            body: JSON.stringify({
-                message: message,
-                chat_id: currentChatId
-            })
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.error) {
-                throw new Error(data.error);
-            }
-            
-            // Update currentChatId if this is a new chat
-            if (!currentChatId) {
-                currentChatId = data.chat_id;
-                window.history.pushState({}, '', `/chat/${currentChatId}`);
-            }
-
-            // Create and append bot message
-            const botMessageDiv = document.createElement('div');
-            botMessageDiv.className = 'message bot-message';
-            botMessageDiv.innerHTML = `
-                <div class="message-content">${data.response}</div>
-                <div class="message-timestamp">Just now</div>
-            `;
-            messageContainer.appendChild(botMessageDiv);
-            messageContainer.scrollTop = messageContainer.scrollHeight;
-        })
-        .catch(error => {
-            console.error('Error:', error);
-            const errorDiv = document.createElement('div');
-            errorDiv.className = 'message error-message';
-            errorDiv.textContent = 'Error sending message. Please try again.';
-            messageContainer.appendChild(errorDiv);
-            messageContainer.scrollTop = messageContainer.scrollHeight;
-        });
-    }
-
-    // Add event listeners for sending messages
-    sendButton.addEventListener('click', () => sendMessage(messageInput.value));
-    messageInput.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            sendMessage(this.value);
-        }
-    });
-
-    // Load initial chat if we have a current_chat_id
-    if (currentChatId) {
-        loadChat(currentChatId);
-        // Set active state on the current chat in history
-        const currentChatItem = document.querySelector(`.chat-history-item[data-chat-id="${currentChatId}"]`);
-        if (currentChatItem) {
-            currentChatItem.classList.add('active');
-        }
-    }
+    chatApp.init();
 });
 </script>
 {% endblock %} 

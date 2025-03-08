@@ -35,33 +35,32 @@ ENV/
 *.db
 *.db-journal
 email_config.json
+config.json
 gmail_config.json
 .env
+.env.example
 uploads/
 processed/
 pdf_samples/
+cache/
 
 # Logs
 *.log
-
-# Environment variables
-.env
-
-# Environment variables and credentials
-settings.json
+automation.log*
+pdf_extraction_test.log
 
 # Database
 *.db
 invoice_emails.db
 receipts.db
-
-# Logs
-*.log
-logs_export_*.txt
+*.db.backup
 
 # PDF files
 pdf_samples/
 downloads/
+processed/
+*.pdf
+pdf_text.txt
 
 # IDE specific files
 .DS_Store
@@ -72,4 +71,11 @@ models/
 *.bin
 *.pt
 *.pth
-*.safetensors 
+*.safetensors
+
+# Temporary files
+temp/
+tmp/
+
+# Test files
+test_*.py 

@@ -2,6 +2,40 @@
 
 {% block title %}Pending Requests - Receipt Automation{% endblock %}
 
+{% block styles %}
+<style>
+    /* Search highlight styling */
+    mark {
+        background-color: #fff3cd;
+        padding: 0.1em 0.2em;
+        border-radius: 2px;
+        font-weight: bold;
+    }
+    
+    /* Animation for search results */
+    @keyframes highlight-row {
+        from { background-color: #fff3cd; }
+        to { background-color: transparent; }
+    }
+    
+    .highlight-animation {
+        animation: highlight-row 1.5s ease-out;
+    }
+    
+    /* Style for the search input */
+    #companySearch:focus {
+        box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
+        border-color: #86b7fe;
+    }
+    
+    /* Badge styling */
+    #resultCount {
+        font-size: 0.9rem;
+        padding: 0.5em 0.7em;
+    }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="container-fluid p-0">
     <h1 class="mb-4">Pending Requests</h1>
@@ -9,8 +43,25 @@
     {% if requests %}
     <div class="card">
         <div class="card-body">
+            <!-- Search bar -->
+            <div class="row mb-3">
+                <div class="col-md-6">
+                    <div class="input-group">
+                        <span class="input-group-text"><i class="bi bi-search"></i></span>
+                        <input type="text" id="companySearch" class="form-control" placeholder="Search by company name..." autofocus>
+                        <button class="btn btn-outline-secondary" type="button" id="clearSearch" title="Clear search (Esc)">
+                            <i class="bi bi-x-lg"></i>
+                        </button>
+                    </div>
+                    <div class="form-text">Press Enter to focus on first result, Esc to clear</div>
+                </div>
+                <div class="col-md-6 text-end d-flex align-items-center justify-content-end">
+                    <span id="resultCount" class="badge bg-primary"></span>
+                </div>
+            </div>
+
             <div class="table-responsive">
-                <table class="table table-striped">
+                <table class="table table-striped" id="pendingTable">
                     <thead>
                         <tr>
                             <th>Invoice Number</th>
@@ -24,7 +75,7 @@
                         {% for request in requests %}
                         <tr>
                             <td>{{ request.invoice_number if request.invoice_number is defined else 'N/A' }}</td>
-                            <td>{{ request.company_name if request.company_name is defined else 'Unknown' }}</td>
+                            <td class="company-name">{{ request.company_name if request.company_name is defined else 'Unknown' }}</td>
                             <td>{{ request.period_start if request.period_start is defined else 'N/A' }}</td>
                             <td>{{ request.period_end if request.period_end is defined else 'N/A' }}</td>
                             <td class="text-end">
@@ -91,6 +142,7 @@
 {% block scripts %}
 <script>
 document.addEventListener('DOMContentLoaded', function() {
+    // Email modal functionality
     const emailModal = document.getElementById('emailModal');
     if (emailModal) {
         emailModal.addEventListener('show.bs.modal', function(event) {
@@ -102,6 +154,152 @@ document.addEventListener('DOMContentLoaded', function() {
             document.getElementById('modalInvoiceDisplay').textContent = `${invoice} (${company})`;
         });
     }
+
+    // Company name search functionality
+    const searchInput = document.getElementById('companySearch');
+    const clearButton = document.getElementById('clearSearch');
+    const resultCount = document.getElementById('resultCount');
+    const table = document.getElementById('pendingTable');
+    const rows = table ? table.querySelectorAll('tbody tr') : [];
+    
+    // Function to update the result count
+    function updateResultCount() {
+        const visibleRows = table.querySelectorAll('tbody tr:not([style*="display: none"])').length;
+        resultCount.textContent = `${visibleRows} of ${rows.length}`;
+        
+        // Change badge color based on results
+        if (visibleRows === 0) {
+            resultCount.classList.remove('bg-primary');
+            resultCount.classList.add('bg-danger');
+        } else if (visibleRows < rows.length) {
+            resultCount.classList.remove('bg-danger');
+            resultCount.classList.add('bg-primary');
+        } else {
+            resultCount.classList.remove('bg-danger', 'bg-primary');
+            resultCount.classList.add('bg-secondary');
+        }
+    }
+    
+    // Function to clear search
+    function clearSearch() {
+        if (searchInput) {
+            searchInput.value = '';
+            
+            // Show all rows and remove highlights
+            rows.forEach(row => {
+                row.style.display = '';
+                const companyCell = row.querySelector('.company-name');
+                if (companyCell) {
+                    companyCell.innerHTML = companyCell.textContent;
+                }
+            });
+            
+            updateResultCount();
+            searchInput.focus();
+        }
+    }
+    
+    // Function to focus on the first visible row's send email button
+    function focusFirstResult() {
+        const firstVisibleRow = table.querySelector('tbody tr:not([style*="display: none"])');
+        if (firstVisibleRow) {
+            const sendButton = firstVisibleRow.querySelector('button');
+            if (sendButton) {
+                sendButton.focus();
+                return true;
+            }
+        }
+        return false;
+    }
+    
+    // Initialize result count
+    if (rows.length > 0) {
+        updateResultCount();
+    }
+    
+    // Function to highlight matching text
+    function highlightText(element, searchTerm) {
+        if (!searchTerm) {
+            // If search term is empty, restore original text
+            element.innerHTML = element.textContent;
+            return;
+        }
+        
+        const text = element.textContent;
+        const regex = new RegExp(`(${searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+        const highlightedText = text.replace(regex, '<mark>$1</mark>');
+        element.innerHTML = highlightedText;
+    }
+    
+    // Search functionality
+    if (searchInput) {
+        searchInput.addEventListener('input', function() {
+            const searchTerm = this.value.toLowerCase().trim();
+            
+            rows.forEach(row => {
+                const companyCell = row.querySelector('.company-name');
+                if (companyCell) {
+                    const companyName = companyCell.textContent.toLowerCase();
+                    
+                    if (searchTerm === '' || companyName.includes(searchTerm)) {
+                        // If row was previously hidden and now visible, add animation
+                        if (row.style.display === 'none') {
+                            row.classList.add('highlight-animation');
+                            // Remove animation class after it completes
+                            setTimeout(() => {
+                                row.classList.remove('highlight-animation');
+                            }, 1500);
+                        }
+                        row.style.display = '';
+                        // Highlight matching text
+                        highlightText(companyCell, searchTerm);
+                    } else {
+                        row.style.display = 'none';
+                    }
+                }
+            });
+            
+            updateResultCount();
+        });
+        
+        // Add keyboard event listener for Enter and Escape keys
+        searchInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                if (focusFirstResult()) {
+                    // If we successfully focused on a result, prevent default to avoid form submission
+                    e.preventDefault();
+                }
+            } else if (e.key === 'Escape') {
+                clearSearch();
+                e.preventDefault();
+            }
+        });
+    }
+    
+    // Clear search button
+    if (clearButton) {
+        clearButton.addEventListener('click', clearSearch);
+    }
+    
+    // Global keyboard shortcuts
+    document.addEventListener('keydown', function(e) {
+        // Ctrl+F or Command+F to focus on search
+        if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+            if (searchInput) {
+                e.preventDefault();
+                searchInput.focus();
+                searchInput.select();
+            }
+        }
+        // Escape to clear search when not in search input
+        else if (e.key === 'Escape' && document.activeElement !== searchInput) {
+            if (searchInput && searchInput.value) {
+                clearSearch();
+                e.preventDefault();
+            }
+        }
+    });
 });
 </script>
 {% endblock %} 

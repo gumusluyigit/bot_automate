@@ -12,35 +12,38 @@
                 <div class="card-body">
                     <form action="{{ url_for('manual_process') }}" method="POST" id="manual-process-form">
                         <div class="mb-3">
-                            <label for="week_select" class="form-label">Select Week</label>
+                            <label for="week_select" class="form-label">Hafta Seçin</label>
                             <select class="form-select" id="week_select" name="selected_week" required>
+                                <option value="">Hafta seçin...</option>
                                 <!-- Options will be populated by JavaScript -->
                             </select>
                         </div>
 
                         <div class="mb-3">
-                            <label class="form-label">PDFs to be Processed</label>
-                            <div class="list-group" id="pdf-list">
-                                {% for pdf in pdfs %}
-                                <div class="list-group-item pdf-item" data-start="{{ pdf.period_start }}" data-end="{{ pdf.period_end }}">
-                                    <div>
-                                        <strong>{{ pdf.company_name }}</strong>
-                                        <span class="text-muted ms-2">Invoice #{{ pdf.invoice_number }}</span>
-                                        <br>
-                                        <small class="text-muted">Period: {{ pdf.period_start }} to {{ pdf.period_end }}</small>
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <label class="form-label mb-0">İşlenecek PDF'ler</label>
+                                <div id="pdf-count" class="badge bg-primary"></div>
+                            </div>
+                            <div class="list-group mb-3" id="pdf-list" style="max-height: 400px; overflow-y: auto;">
+                                <template id="pdf-item-template">
+                                    <div class="list-group-item">
+                                        <h5 class="mb-1">${pdf.filename}</h5>
+                                        <small class="text-muted">Dönem: ${pdf.period_start} - ${pdf.period_end}</small>
                                     </div>
-                                </div>
-                                {% endfor %}
+                                </template>
                             </div>
                             <div id="no-pdfs-message" class="mt-3 py-2 px-3 rounded" style="display: none; background-color: #fff3cd; color: #856404; border: 1px solid #ffeeba;">
                                 <i class="bi bi-exclamation-triangle me-2"></i>
-                                No PDFs found for the selected week
+                                Seçilen hafta için PDF bulunamadı
                             </div>
                         </div>
 
                         <div class="text-end">
-                            <button type="submit" class="btn btn-primary" id="process-button">
-                                Process PDFs for Selected Week
+                            <button type="submit" class="btn btn-primary" id="process-button" disabled>
+                                <span id="button-text">Seçilen Haftanın PDF'lerini İşle</span>
+                                <span id="button-spinner" class="spinner-border spinner-border-sm ms-2 d-none" role="status">
+                                    <span class="visually-hidden">Yükleniyor...</span>
+                                </span>
                             </button>
                         </div>
                     </form>
@@ -51,13 +54,14 @@
         <div class="col-md-4">
             <div class="card">
                 <div class="card-body">
-                    <h5 class="card-title">Processing Status</h5>
+                    <h5 class="card-title">İşlem Durumu</h5>
                     <div id="processing-status">
                         <div class="py-2 px-3 rounded" style="background-color: #cff4fc; color: #055160; border: 1px solid #b6effb;">
                             <i class="bi bi-info-circle me-2"></i>
-                            Select a week to begin processing
+                            İşleme başlamak için bir hafta seçin
                         </div>
                     </div>
+                    <div id="process-result" class="mt-3" style="max-height: 400px; overflow-y: auto;"></div>
                 </div>
             </div>
         </div>
@@ -71,15 +75,22 @@ document.addEventListener('DOMContentLoaded', function() {
     const form = document.getElementById('manual-process-form');
     const weekSelect = document.getElementById('week_select');
     const processButton = document.getElementById('process-button');
-    const statusDiv = document.getElementById('processing-status');
-    const pdfItems = document.querySelectorAll('.pdf-item');
+    const pdfList = document.getElementById('pdf-list');
     const noPdfsMessage = document.getElementById('no-pdfs-message');
+    const processResult = document.getElementById('process-result');
+    const pdfCount = document.getElementById('pdf-count');
 
-    // Function to get Monday of the current week
+    // Turkish month names
+    const monthNames = [
+        'Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran',
+        'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'
+    ];
+
+    // Function to get Monday of a date
     function getMonday(d) {
         d = new Date(d);
         const day = d.getDay();
-        const diff = d.getDate() - day + (day === 0 ? -6 : 1); // adjust when day is sunday
+        const diff = d.getDate() - day + (day === 0 ? -6 : 1);
         return new Date(d.setDate(diff));
     }
 
@@ -88,13 +99,9 @@ document.addEventListener('DOMContentLoaded', function() {
         return date.toISOString().split('T')[0];
     }
 
-    // Function to format date for display
-    function formatDateDisplay(date) {
-        return date.toLocaleDateString('en-US', { 
-            year: 'numeric', 
-            month: 'short', 
-            day: 'numeric'
-        });
+    // Function to format date in Turkish
+    function formatDateTurkish(date) {
+        return `${date.getDate()} ${monthNames[date.getMonth()]} ${date.getFullYear()}`;
     }
 
     // Generate weeks (current week and previous 11 weeks)
@@ -108,152 +115,246 @@ document.addEventListener('DOMContentLoaded', function() {
         sunday.setDate(sunday.getDate() + 6);
 
         const option = document.createElement('option');
-        option.value = formatDate(monday) + ',' + formatDate(sunday);
-        option.text = `${formatDateDisplay(monday)} - ${formatDateDisplay(sunday)}`;
-        if (i === 0) option.selected = true;
+        option.value = `${formatDate(monday)},${formatDate(sunday)}`;
+        option.text = `${formatDateTurkish(monday)} - ${formatDateTurkish(sunday)}`;
         weekSelect.appendChild(option);
     }
 
-    // Function to check if date ranges overlap
-    function doDateRangesOverlap(start1, end1, start2, end2) {
-        // Convert all dates to Date objects
-        const s1 = new Date(start1);
-        const e1 = new Date(end1);
-        const s2 = new Date(start2);
-        const e2 = new Date(end2);
-        
-        console.log('Comparing date ranges:');
-        console.log('Week:', s1.toISOString().split('T')[0], 'to', e1.toISOString().split('T')[0]);
-        console.log('PDF:', s2.toISOString().split('T')[0], 'to', e2.toISOString().split('T')[0]);
-        
-        // Check if the ranges overlap
-        const overlap = s1 <= e2 && s2 <= e1;
-        console.log('Overlap:', overlap);
-        return overlap;
-    }
-
-    // Update PDF visibility based on selected week
+    // Handle week selection change
     weekSelect.addEventListener('change', function() {
-        const [weekStart, weekEnd] = this.value.split(',');
-        let visibleCount = 0;
-        
-        console.log('Selected week:', weekStart, 'to', weekEnd);
-        
-        pdfItems.forEach(item => {
-            const pdfStart = item.dataset.start;
-            const pdfEnd = item.dataset.end;
-            
-            console.log('Checking PDF:', item.querySelector('strong').textContent);
-            console.log('PDF dates:', pdfStart, 'to', pdfEnd);
-            
-            // Show PDF if its period overlaps with selected week
-            if (doDateRangesOverlap(weekStart, weekEnd, pdfStart, pdfEnd)) {
-                item.style.display = '';
-                visibleCount++;
-                console.log('PDF is visible');
-            } else {
-                item.style.display = 'none';
-                console.log('PDF is hidden');
-            }
-        });
-
-        console.log('Total visible PDFs:', visibleCount);
-
-        // Show/hide no PDFs message and update button state
-        noPdfsMessage.style.display = visibleCount > 0 ? 'none' : 'block';
-        processButton.disabled = visibleCount === 0;
-    });
-
-    // Trigger initial visibility update
-    weekSelect.dispatchEvent(new Event('change'));
-
-    // Process button click handler
-    document.getElementById('process-button').addEventListener('click', function() {
-        const selectedWeek = document.getElementById('week_select').value;
-        const button = this;
-        const originalText = button.innerHTML;
-        
-        if (!selectedWeek) {
-            alert('Please select a week first');
+        if (!this.value) {
+            processButton.disabled = true;
+            pdfList.innerHTML = '';
+            noPdfsMessage.style.display = 'none';
             return;
         }
+
+        const [weekStart, weekEnd] = this.value.split(',');
         
         // Show loading state
-        button.disabled = true;
-        button.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Processing...';
+        pdfList.innerHTML = '<div class="text-center"><div class="spinner-border text-primary" role="status"></div><p class="mt-2">PDFler yükleniyor...</p></div>';
+        processButton.disabled = true;
+        noPdfsMessage.style.display = 'none';
+
+        // Fetch PDFs for selected week
+        fetch('/get-pdfs-for-week', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': '{{ csrf_token() }}'
+            },
+            body: JSON.stringify({
+                week_start: weekStart,
+                week_end: weekEnd
+            })
+        })
+        .then(response => {
+            // Check if the response is JSON before parsing
+            const contentType = response.headers.get('content-type');
+            if (contentType && contentType.includes('application/json')) {
+                return response.json();
+            } else {
+                return response.text().then(text => {
+                    throw new Error(`Server returned non-JSON response: ${text.substring(0, 100)}...`);
+                });
+            }
+        })
+        .then(data => {
+            if (data.success) {
+                if (data.pdfs.length > 0) {
+                    // Update PDF count
+                    pdfCount.textContent = `${data.pdfs.length} PDF Dosyası`;
+                    pdfCount.style.display = 'block';
+                    
+                    const pdfsHtml = data.pdfs.map(pdf => `
+                        <div class="list-group-item pdf-item">
+                            <h5 class="mb-1">
+                                ${pdf.company_name}
+                            </h5>
+                            <p class="mb-1"><small class="text-muted">Dosya: ${pdf.filename}</small></p>
+                            <small class="text-muted">Dönem: ${pdf.period_start} - ${pdf.period_end}</small>
+                        </div>
+                    `).join('');
+                    pdfList.innerHTML = pdfsHtml;
+                    processButton.disabled = false;
+                    noPdfsMessage.style.display = 'none';
+                } else {
+                    pdfCount.style.display = 'none';
+                    pdfList.innerHTML = '';
+                    noPdfsMessage.style.display = 'block';
+                    processButton.disabled = true;
+                }
+            } else {
+                pdfCount.style.display = 'none';
+                pdfList.innerHTML = `<div class="alert alert-danger">Hata: ${data.error}</div>`;
+                processButton.disabled = true;
+            }
+        })
+        .catch(error => {
+            pdfCount.style.display = 'none';
+            pdfList.innerHTML = `<div class="alert alert-danger">PDF'ler yüklenirken hata oluştu: ${error}</div>`;
+            processButton.disabled = true;
+        });
+    });
+
+    // Handle form submission
+    form.addEventListener('submit', function(e) {
+        e.preventDefault();
+        const selectedWeek = weekSelect.value;
+        if (!selectedWeek) {
+            alert('Lütfen bir hafta seçin');
+            return;
+        }
+
+        // Disable the button immediately
+        processButton.disabled = true;
+        weekSelect.disabled = true;
+
+        // Update button state
+        processButton.innerHTML = `
+            <span>İşleniyor...</span>
+            <span class="spinner-border spinner-border-sm ms-2" role="status">
+                <span class="visually-hidden">Yükleniyor...</span>
+            </span>
+        `;
+
+        const processingStatus = document.getElementById('processing-status');
+        processResult.innerHTML = '';
         
-        // Send request to process PDFs
+        // Update processing status
+        processingStatus.innerHTML = `
+            <div class="py-2 px-3 rounded" style="background-color: #cff4fc; color: #055160; border: 1px solid #b6effb;">
+                <i class="bi bi-arrow-repeat me-2"></i>
+                PDFler işleniyor, lütfen bekleyin...
+            </div>
+        `;
+
+        // Create AbortController for timeout
+        const controller = new AbortController();
+        const timeout = setTimeout(() => {
+            controller.abort();
+        }, 300000); // 5 minute timeout
+
         fetch('/manual-process', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
-                'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]').getAttribute('content')
+                'X-CSRF-Token': '{{ csrf_token() }}'
             },
-            body: `selected_week=${selectedWeek}`
+            body: `selected_week=${selectedWeek}`,
+            signal: controller.signal
         })
-        .then(response => response.json())
-        .then(data => {
-            const resultDiv = document.getElementById('processing-status');
-            if (data.success) {
-                // Show success message with details
-                let message = `<div class="alert alert-success">
-                    <h6>Processing Complete</h6>
-                    <p>${data.message}</p>`;
-                
-                if (data.processed_files && data.processed_files.length > 0) {
-                    message += `<p><strong>Processed Files:</strong></p><ul>`;
-                    data.processed_files.forEach(file => {
-                        message += `<li>${file.company_name} (Invoice #${file.invoice_number})</li>`;
-                    });
-                    message += '</ul>';
-                }
-                
-                if (data.auto_emailed_files && data.auto_emailed_files.length > 0) {
-                    message += `<p><strong>Auto-emailed Files:</strong></p><ul>`;
-                    data.auto_emailed_files.forEach(file => {
-                        message += `<li>${file.company_name} (Invoice #${file.invoice_number}) to ${file.email}</li>`;
-                    });
-                    message += '</ul>';
-                }
-                
-                message += '</div>';
-                resultDiv.innerHTML = message;
-                
-                // Update visibility of PDFs
-                weekSelect.dispatchEvent(new Event('change'));
+        .then(response => {
+            clearTimeout(timeout);
+            // Check if the response is JSON before parsing
+            const contentType = response.headers.get('content-type');
+            if (!response.ok) {
+                return response.text().then(text => {
+                    try {
+                        // Only try to parse as JSON if it's actually JSON
+                        if (contentType && contentType.includes('application/json')) {
+                            const json = JSON.parse(text);
+                            throw new Error(json.error || `Server error: ${response.status}`);
+                        } else {
+                            throw new Error(`Server error: ${text.substring(0, 100)}... (${response.status})`);
+                        }
+                    } catch (e) {
+                        throw new Error(`Server error: ${e.message || response.status}`);
+                    }
+                });
+            }
+            
+            if (contentType && contentType.includes('application/json')) {
+                return response.json();
             } else {
-                // Show detailed error message
-                resultDiv.innerHTML = `<div class="alert alert-danger">
-                    <h6>Error Processing PDFs</h6>
-                    <p>${data.error || 'An unexpected error occurred'}</p>
-                    <p>Please check the following:</p>
-                    <ul>
-                        <li>Email settings are properly configured in Settings page</li>
-                        <li>All required files are accessible</li>
-                        <li>Selected PDFs are valid and readable</li>
-                    </ul>
-                </div>`;
+                return response.text().then(text => {
+                    throw new Error(`Server returned non-JSON response: ${text.substring(0, 100)}...`);
+                });
+            }
+        })
+        .then(data => {
+            if (data.success) {
+                let resultHtml = `<div class="alert alert-success">${data.message}</div>`;
+                
+                // Display processed files
+                if (data.processed_files && data.processed_files.length > 0) {
+                    resultHtml += '<h6 class="mt-3">İşlenen Dosyalar:</h6>';
+                    resultHtml += data.processed_files.map(file => `
+                        <div class="pdf-item small border rounded p-2 mb-2">
+                            <div class="fw-bold">${file.company_name}</div>
+                            <div class="text-muted">Dönem: ${file.period_start} - ${file.period_end}</div>
+                        </div>
+                    `).join('');
+                }
+                
+                // Display automatically emailed files
+                if (data.auto_emailed_files && data.auto_emailed_files.length > 0) {
+                    resultHtml += '<h6 class="mt-3">Otomatik E-posta Gönderilen Dosyalar:</h6>';
+                    resultHtml += data.auto_emailed_files.map(file => `
+                        <div class="pdf-item small border rounded p-2 mb-2 bg-success bg-opacity-10">
+                            <div class="fw-bold">${file.company_name}</div>
+                            <div class="text-muted">Dönem: ${file.period_start} - ${file.period_end}</div>
+                            <div class="small"><i class="bi bi-envelope-check me-1"></i>Gönderildi: ${file.email}</div>
+                        </div>
+                    `).join('');
+                }
+                
+                // Display skipped files
+                if (data.skipped_files && data.skipped_files.length > 0) {
+                    resultHtml += '<h6 class="mt-3">Atlanan Dosyalar:</h6>';
+                    resultHtml += data.skipped_files.map(file => `
+                        <div class="pdf-item small border rounded p-2 mb-2 bg-light">
+                            <div class="fw-bold">${file.filename}</div>
+                            ${file.company_name ? `<div>Şirket: ${file.company_name}</div>` : ''}
+                            ${file.invoice_number ? `<div>Fatura No: ${file.invoice_number}</div>` : ''}
+                            <div class="text-danger">Neden: ${file.reason}</div>
+                        </div>
+                    `).join('');
+                }
+                
+                processResult.innerHTML = resultHtml;
+                
+                processingStatus.innerHTML = `
+                    <div class="py-2 px-3 rounded" style="background-color: #d1e7dd; color: #0f5132; border: 1px solid #badbcc;">
+                        <i class="bi bi-check-circle me-2"></i>
+                        İşlem başarıyla tamamlandı
+                    </div>
+                `;
+
+                setTimeout(() => {
+                    weekSelect.dispatchEvent(new Event('change'));
+                }, 1000);
+            } else {
+                throw new Error(data.error || 'İşlem sırasında bir hata oluştu');
             }
         })
         .catch(error => {
-            // Show detailed error message
-            const resultDiv = document.getElementById('processing-status');
-            resultDiv.innerHTML = `<div class="alert alert-danger">
-                <h6>Error Processing PDFs</h6>
-                <p>${error.message || 'An unexpected error occurred'}</p>
-                <p>Please check the following:</p>
-                <ul>
-                    <li>Your internet connection is stable</li>
-                    <li>The application server is running</li>
-                    <li>Try refreshing the page and trying again</li>
-                </ul>
+            clearTimeout(timeout);
+            let errorMessage = error.message || error.toString();
+            
+            if (error.name === 'AbortError') {
+                errorMessage = 'İşlem zaman aşımına uğradı. Lütfen daha sonra tekrar deneyin.';
+            }
+            
+            processResult.innerHTML = `<div class="alert alert-danger">
+                <strong>PDF'ler işlenirken hata oluştu:</strong><br>
+                ${errorMessage}
             </div>`;
-            console.error('Error:', error);
+            
+            processingStatus.innerHTML = `
+                <div class="py-2 px-3 rounded" style="background-color: #f8d7da; color: #842029; border: 1px solid #f5c2c7;">
+                    <i class="bi bi-exclamation-triangle me-2"></i>
+                    İşlem sırasında hata oluştu
+                </div>
+            `;
         })
         .finally(() => {
             // Reset button state
-            button.disabled = false;
-            button.innerHTML = originalText;
+            processButton.disabled = false;
+            weekSelect.disabled = false;
+            processButton.innerHTML = `
+                <span>Seçilen Haftanın PDF'lerini İşle</span>
+            `;
         });
     });
 });
