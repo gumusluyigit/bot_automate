@@ -137,4 +137,4 @@ This project is proprietary software. All rights reserved.
 
 ## Support
 
-For support inquiries, please contact the developer at your_email@example.com.
+For support inquiries, please contact the developer at gumusluyigit@gmail.com.
