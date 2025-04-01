@@ -1,6 +1,6 @@
 {
-    "sender_email": "invoiceretriever@beox.com",
-    "internal_email": "internaldept@beox.com",
-    "ms_tenant_id": "07ab28b1-de16-4ae7-93e7-70c1d7580ad9",
-    "ms_client_id": "02bd7d51-7a4b-4f98-8289-8f12bd1e4cd6"
+    "sender_email": "your_email@example.com",
+    "internal_email": "your_internal_email@example.com",
+    "ms_tenant_id": "your_tenant_id_here",
+    "ms_client_id": "your_client_id_here"
 }

@@ -140,7 +140,7 @@ else:
     # Production mode - restrict origins
     CORS(app, resources={
         r"/*": {
-            "origins": ["https://beox.com", "https://www.beox.com"],  # Add your production domains here
+            "origins": ["https://example.com", "https://www.example.com"],  # Add your production domains here
             "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
             "allow_headers": ["Content-Type", "Authorization", "X-CSRF-Token"],
             "supports_credentials": True

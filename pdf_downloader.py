@@ -18,8 +18,8 @@ logger = logging.getLogger('pdf_downloader')
 
 class PDFDownloader:
     def __init__(self):
-        self.login_url = "https://www.beoxcockpit.com"  # Changed to base URL
-        self.invoice_url = "https://www.beoxcockpit.com/pages/list_invoices.php"
+        self.login_url = "https://example.com"  # Base URL for the PDF source
+        self.invoice_url = "https://example.com/pages/list_invoices.php"
         self.download_folder = "downloads"
         self.cache_folder = "cache"
         self.session = requests.Session()
@@ -234,7 +234,7 @@ class PDFDownloader:
                 # Construct full URL if needed
                 pdf_url = pdf_info['url']
                 if not pdf_url.startswith('http'):
-                    full_url = f"https://www.beoxcockpit.com{pdf_url}"
+                    full_url = f"https://example.com{pdf_url}"
                 else:
                     full_url = pdf_url
                 

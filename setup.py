@@ -78,13 +78,10 @@ def setup_env_file():
         # Generate a secret key
         secret_key = secrets.token_hex(16)
         
-        # Replace placeholders with actual values
-        env_content = env_example
-        
-        # Ask for Beox credentials
-        print("\n  Please enter your Beox Cockpit credentials:")
-        beox_username = input("  Username: ")
-        beox_password = getpass.getpass("  Password: ")
+        # Ask for PDF source credentials
+        print("\n  Please enter your PDF source credentials:")
+        pdf_source_username = input("  Username: ")
+        pdf_source_password = getpass.getpass("  Password: ")
         
         # Ask for email configuration
         print("\n  Please enter your email configuration:")
@@ -97,8 +94,8 @@ def setup_env_file():
         
         # Replace placeholders in the .env file
         replacements = {
-            'your_beox_username': beox_username,
-            'your_beox_password': beox_password,
+            'your_pdf_source_username': pdf_source_username,
+            'your_pdf_source_password': pdf_source_password,
             'smtp.example.com': smtp_server,
             '587': smtp_port,
             'your_email@example.com': smtp_username,
@@ -108,11 +105,11 @@ def setup_env_file():
         }
         
         for placeholder, value in replacements.items():
-            env_content = env_content.replace(placeholder, value)
+            env_example = env_example.replace(placeholder, value)
         
         # Write the .env file
         with open('.env', 'w') as f:
-            f.write(env_content)
+            f.write(env_example)
         
         print("  Created .env file with your configuration.")
         return True
