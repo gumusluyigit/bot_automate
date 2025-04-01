@@ -1,140 +1,125 @@
-# Receipt Automation System
+# PDF Invoice Processing Automation
 
-A comprehensive web application for automating the processing of PDF invoices, extracting key information, and managing email delivery to clients.
+A robust web application that automates the process of downloading, processing, and managing PDF invoices. Built with Python Flask and React, this system provides a seamless workflow for handling invoice documents.
 
-## Features
+## 🌟 Features
 
-- **Automated PDF Processing**: Automatically download and process PDF invoices from Beox Cockpit
-- **Data Extraction**: Extract invoice numbers, company names, dates, and amounts from PDFs
-- **Email Management**: Send invoices to clients via email with tracking
-- **Company Email Association**: Remember email addresses for companies for future automation
-- **Manual Processing**: Process PDFs for specific date ranges manually
-- **Pending Requests Management**: View and manage pending invoice requests
-- **Search Functionality**: Filter company names in the pending requests list
-- **Settings Management**: Configure system settings and email templates
+- **Automated PDF Download**: Securely downloads invoices from configured sources
+- **Smart Processing**: Extracts and validates invoice data using advanced algorithms
+- **Email Integration**: Seamless integration with Microsoft Graph API for email operations
+- **Database Management**: Efficient storage and retrieval of invoice data
+- **Modern UI**: Clean and intuitive React-based frontend
+- **Docker Support**: Easy deployment with containerization
+- **Security**: Built-in CSRF protection and secure file handling
 
-## Technical Overview
-
-The system is built with:
-- **Backend**: Python with Flask web framework
-- **Database**: SQLite for data storage
-- **PDF Processing**: PyPDF2 and pdfplumber for text extraction
-- **Web Scraping**: Requests and BeautifulSoup for downloading PDFs
-- **Email**: SMTP integration for sending emails
-- **Frontend**: Bootstrap 5, HTML, CSS, and JavaScript
-
-## Setup Instructions
+## 🚀 Quick Start
 
 ### Prerequisites
 
-- Python 3.8 or higher
-- pip (Python package manager)
-- Git (optional, for cloning the repository)
+- Python 3.8+
+- Node.js 14+
+- Docker (optional)
 
 ### Installation
 
-1. Clone the repository (or download and extract the ZIP file):
-   ```
-   git clone https://github.com/gumusluyigit/bot_automate.git
-   cd bot_automate
-   ```
+1. Clone the repository:
+```bash
+git clone https://github.com/yourusername/pdf-invoice-automation.git
+cd pdf-invoice-automation
+```
 
-2. Create and activate a virtual environment (recommended):
-   ```
-   python -m venv venv
-   
-   # On Windows
-   venv\Scripts\activate
-   
-   # On macOS/Linux
-   source venv/bin/activate
-   ```
+2. Set up the Python environment:
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install -r requirements.txt
+```
 
-3. Install the required packages:
-   ```
-   pip install -r requirements.txt
-   ```
+3. Configure environment variables:
+```bash
+cp .env.example .env
+# Edit .env with your configuration
+```
 
-4. Create a `.env` file in the project root with the following variables:
-   ```
-   # Beox Cockpit credentials
-   BEOX_USERNAME=your_username
-   BEOX_PASSWORD=your_password
-   
-   # Email configuration
-   SMTP_SERVER=smtp.example.com
-   SMTP_PORT=587
-   SMTP_USERNAME=your_email@example.com
-   SMTP_PASSWORD=your_email_password
-   
-   # Internal notification email
-   INTERNAL_EMAIL=notifications@example.com
-   
-   # OpenAI API key (optional, for AI features)
-   OPENAI_API_KEY=your_openai_api_key
-   
-   # Flask secret key (for session security)
-   SECRET_KEY=generate_a_secure_random_key
-   ```
+4. Initialize the database:
+```bash
+python init_db.py
+```
 
-5. Initialize the database:
-   ```
-   python database_handler.py
-   ```
+5. Start the application:
+```bash
+python app.py
+```
 
-### Running the Application
+### Docker Deployment
 
-1. Start the Flask application:
-   ```
-   python app.py
-   ```
+```bash
+docker-compose up --build
+```
 
-2. Access the web interface at:
-   ```
-   http://localhost:5000
-   ```
+## 🛠️ Configuration
 
-## Usage Guide
+### Environment Variables
 
-### Manual Processing
+Key configuration options in `.env`:
 
-1. Navigate to the "Manual Processing" page
-2. Select a week from the dropdown menu
-3. The system will display available PDFs for that week
-4. Click "Process PDFs" to extract information and store in the database
-5. PDFs for companies with registered emails will be sent automatically
-6. Other PDFs will be added to the pending requests
+- `PDF_SOURCE_USERNAME`: Username for PDF source
+- `PDF_SOURCE_PASSWORD`: Password for PDF source
+- `SMTP_SERVER`: Email server configuration
+- `MS_TENANT_ID`: Microsoft Graph API tenant ID
+- `MS_CLIENT_ID`: Microsoft Graph API client ID
 
-### Pending Requests
+### Database
 
-1. Navigate to the "Pending Requests" page
-2. Use the search bar to filter by company name
-3. Click "Send Email" for a specific invoice
-4. Enter the recipient's email address
-5. The system will send the invoice and remember the email for future use
+The application uses SQLite by default. Database operations are handled through the `DatabaseHandler` class.
 
-### Settings
+## 📁 Project Structure
 
-1. Navigate to the "Settings" page
-2. Configure email templates and system settings
-3. View and manage company email associations
+```
+pdf-invoice-automation/
+├── app.py                 # Main application
+├── pdf_downloader.py      # PDF download operations
+├── pdf_processor.py       # PDF processing logic
+├── database_handler.py    # Database operations
+├── email_handler.py       # Email operations
+├── config_handler.py      # Configuration management
+├── ms_graph_client.py     # Microsoft Graph API client
+├── frontend/             # React frontend
+├── templates/            # HTML templates
+├── static/              # Static assets
+└── init_db.py           # Database initialization
+```
 
-## Troubleshooting
+## 🔒 Security
 
-- **PDF Processing Issues**: Check the `automation.log` file for detailed error messages
-- **Email Sending Failures**: Verify SMTP settings in the `.env` file
-- **Database Errors**: Use the `check_db.py` script to diagnose database issues
+- CSRF protection enabled
+- Secure file handling
+- Environment variable based configuration
+- Input validation and sanitization
 
-## Maintenance
+## 🤝 Contributing
 
-- **Logs**: Check `automation.log` for system activity and errors
-- **Database Backup**: Periodically backup the `invoice_emails.db` file
-- **Cache Clearing**: Delete files in the `cache` directory if experiencing issues
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
 
-## License
+## 📝 License
 
-This project is proprietary software. All rights reserved.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## Support
+## 🙏 Acknowledgments
 
-For support inquiries, please contact the developer at gumusluyigit@gmail.com.
+- Flask web framework
+- React for frontend
+- Microsoft Graph API
+- All contributors and maintainers
+
+## 📞 Support
+
+For support, please open an issue in the GitHub repository or contact the maintainers.
+
+---
+
+Made with ❤️ by [Your Name/Organization]
